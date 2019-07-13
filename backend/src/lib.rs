@@ -36,6 +36,7 @@ pub use key_val_print::{DontPrint, KeyValPrint, MessageKind};
 use std::collections::HashMap;
 use std::fs::{self, File, OpenOptions};
 use std::io::{prelude::*, BufReader, BufWriter};
+use std::iter::Iterator;
 use std::mem;
 use std::path::PathBuf;
 use std::process::Command;
@@ -102,6 +103,32 @@ pub fn apply_patch<P: KeyValPrint>(
     config.build.iso = output;
 
     build_and_emit_iso(printer, zip, compiled_library, config)
+}
+
+pub fn build_raw<P: KeyValPrint>(printer: &P) -> Result<(), Error> {
+    printer.print(None, "Parsing", "RomHack.toml");
+
+    let mut buffer = Vec::new();
+
+    let mut config: Config = {
+        let mut toml_file = File::open("RomHack.toml").context("RomhHack.toml cannot be found")?;
+        toml_file.read_to_end(&mut buffer).context("Couldn't read RomHack.toml")?;
+        toml::from_slice(&buffer).context("Can't parse RomHack.toml")?
+    };
+    match config.link.libs {
+        Some(ref vec) => if vec.len() == 0 { bail!("No libraries suplied") },
+        None => bail!("No libraries suplied")
+    }
+
+    {
+        buffer.clear();
+        let lib: &PathBuf = config.link.libs.as_ref().unwrap().get(0).clone().unwrap();
+        let mut file = File::open(lib).context("Failed to open library cannot be found")?;
+        file.read_to_end(&mut buffer).context("Failed to read library")?;
+    }
+
+    config.link.libs.as_mut().unwrap().remove(0);
+    build_and_emit_iso(printer, FileSystem, buffer, config)
 }
 
 pub fn open_config_from_patch<R: Read + Seek>(

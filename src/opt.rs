@@ -11,6 +11,9 @@ pub enum Opt {
         /// Compiles the Rom Hack as a patch
         #[structopt(short = "p", long = "patch")]
         patch: bool,
+        /// Compiles the Rom Hack from local files
+        #[structopt(short = "r", long = "raw")]
+        raw: bool
     },
     /// Applies a patch file to a game to create a Rom Hack
     #[structopt(name = "apply")]

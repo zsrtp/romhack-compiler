@@ -8,7 +8,7 @@ mod opt;
 
 use failure::{Error, ResultExt};
 use opt::Opt;
-use romhack_backend::{apply_patch, build, new, KeyValPrint, MessageKind};
+use romhack_backend::{apply_patch, build, build_raw, new, KeyValPrint, MessageKind};
 use std::io::prelude::*;
 use structopt::StructOpt;
 use termcolor::{BufferWriter, Color, ColorChoice, ColorSpec, WriteColor};
@@ -52,8 +52,12 @@ fn try_main() -> Result<(), Error> {
     let opt = Opt::from_args();
 
     match opt {
-        Opt::Build { debug, patch } => {
-            build(&TermPrinter, debug, patch).context("Couldn't build the Rom Hack")?
+        Opt::Build { debug, patch, raw } => {
+            if(raw) {
+                build_raw(&TermPrinter).context("Couldn't build the Rom Hack")?
+            } else {
+                build(&TermPrinter, debug, patch).context("Couldn't build the Rom Hack")?
+            }
         }
         Opt::New { name } => new(&name).context("Couldn't create the Rom Hack project")?,
         Opt::Apply {
