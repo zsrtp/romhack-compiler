@@ -105,30 +105,41 @@ pub fn apply_patch<P: KeyValPrint>(
     build_and_emit_iso(printer, zip, compiled_library, config)
 }
 
-pub fn build_raw<P: KeyValPrint>(printer: &P) -> Result<(), Error> {
+pub fn build_raw<P: KeyValPrint>(printer: &P, patch: bool) -> Result<(), Error> {
     printer.print(None, "Parsing", "RomHack.toml");
 
     let mut buffer = Vec::new();
 
     let mut config: Config = {
         let mut toml_file = File::open("RomHack.toml").context("RomhHack.toml cannot be found")?;
-        toml_file.read_to_end(&mut buffer).context("Couldn't read RomHack.toml")?;
+        toml_file
+            .read_to_end(&mut buffer)
+            .context("Couldn't read RomHack.toml")?;
         toml::from_slice(&buffer).context("Can't parse RomHack.toml")?
     };
     match config.link.libs {
-        Some(ref vec) => if vec.len() == 0 { bail!("No libraries suplied") },
-        None => bail!("No libraries suplied")
+        Some(ref vec) => {
+            if vec.len() == 0 {
+                bail!("No libraries suplied")
+            }
+        }
+        None => bail!("No libraries suplied"),
     }
 
     {
         buffer.clear();
         let lib: &PathBuf = config.link.libs.as_ref().unwrap().get(0).clone().unwrap();
         let mut file = File::open(lib).context("Failed to open library cannot be found")?;
-        file.read_to_end(&mut buffer).context("Failed to read library")?;
+        file.read_to_end(&mut buffer)
+            .context("Failed to read library")?;
     }
 
     config.link.libs.as_mut().unwrap().remove(0);
-    build_and_emit_iso(printer, FileSystem, buffer, config)
+    if patch {
+        build_patch(printer, buffer, config)
+    } else {
+        build_and_emit_iso(printer, FileSystem, buffer, config)
+    }
 }
 
 pub fn open_config_from_patch<R: Read + Seek>(
@@ -189,7 +200,8 @@ fn build_patch<P: KeyValPrint>(
                 "Couldn't read the file \"{}\" to store it in the patch.",
                 actual_path.display()
             )
-        })?).context("Failed storing a file in the patch")?;
+        })?)
+        .context("Failed storing a file in the patch")?;
     }
     config.files = new_map;
 
@@ -200,8 +212,17 @@ fn build_patch<P: KeyValPrint>(
     zip.write_all(&compiled_library)
         .context("Failed storing the compiled library in the patch")?;
 
+    let mut modified_libs = Vec::new();
     for (index, lib_path) in config.link.libs.iter().flat_map(|x| x).enumerate() {
         let zip_path = format!("lib{}.a", index);
+
+        printer.print(
+            Some(MessageKind::Warning),
+            "Storing",
+            &format!("{:?} as {}", lib_path, zip_path),
+        );
+        modified_libs.push(zip_path.clone());
+
         zip.start_file(zip_path, FileOptions::default())
             .context("Failed creating a new patch file entry")?;
 
@@ -243,6 +264,9 @@ fn build_patch<P: KeyValPrint>(
     config.build = Default::default();
     zip.start_file("RomHack.toml", FileOptions::default())
         .context("Failed to create the patch index")?;
+    if modified_libs.len() > 0 {
+        config.link.libs = Some(modified_libs.into_iter().map(|x| PathBuf::from(x)).collect());
+    }
     let config = toml::to_vec(&config).context("Couldn't encode the patch index")?;
     zip.write_all(&config)
         .context("Failed storing the patch index")?;
@@ -269,7 +293,8 @@ pub fn build_iso<'a, P: KeyValPrint, F: FileSource>(
                     "Couldn't read the file \"{}\" to store it in the ISO.",
                     actual_path.display()
                 )
-            })?.into();
+            })?
+            .into();
     }
 
     let mut original_symbols = HashMap::new();
@@ -312,7 +337,8 @@ pub fn build_iso<'a, P: KeyValPrint, F: FileSource>(
         base_address.value() as u32,
         config.link.entries.clone(),
         &original_symbols,
-    ).context("Couldn't link the Rom Hack")?;
+    )
+    .context("Couldn't link the Rom Hack")?;
 
     printer.print(None, "Creating", "symbol map");
 
@@ -326,7 +352,8 @@ pub fn build_iso<'a, P: KeyValPrint, F: FileSource>(
             .and_then(|m| iso.resolve_path(m))
             .map(|f| &*f.data),
         &linked.sections,
-    ).context("Couldn't create the new symbol map")?;
+    )
+    .context("Couldn't create the new symbol map")?;
 
     let mut instructions = Vec::new();
     if let Some(patch) = config.src.patch.take() {
@@ -419,7 +446,8 @@ pub fn build_and_emit_iso<P: KeyValPrint, F: FileSource>(
             File::create(out_path).context("Couldn't create the final ISO")?,
         ),
         &iso,
-    ).context("Couldn't write the final ISO")?;
+    )
+    .context("Couldn't write the final ISO")?;
 
     Ok(())
 }
@@ -459,7 +487,8 @@ entries = ["init"] # Enter the exported function names here
 base = "0x8040_1000" # Enter the start address of the Rom Hack's code here
 "#,
         name.replace('-', "_"),
-    ).context("Couldn't write the RomHack.toml")?;
+    )
+    .context("Couldn't write the RomHack.toml")?;
 
     let mut file = File::create(format!("{}/src/lib.rs", name))
         .context("Couldn't create the lib.rs source file")?;
@@ -473,7 +502,8 @@ pub mod panic;
 #[no_mangle]
 pub extern "C" fn init() {}
 "#
-    ).context("Couldn't write the lib.rs source file")?;
+    )
+    .context("Couldn't write the lib.rs source file")?;
 
     let mut file = File::create(format!("{}/src/panic.rs", name))
         .context("Couldn't create the panic.rs source file")?;
@@ -486,7 +516,8 @@ pub fn panic(_info: &::core::panic::PanicInfo) -> ! {
     loop {}
 }
 "#
-    ).context("Couldn't write the panic.rs source file")?;
+    )
+    .context("Couldn't write the panic.rs source file")?;
 
     let mut file = File::create(format!("{}/src/patch.asm", name))
         .context("Couldn't create the default patch file")?;
@@ -494,7 +525,8 @@ pub fn panic(_info: &::core::panic::PanicInfo) -> ! {
         file,
         r#"; You can use this to patch the game's code to call into the Rom Hack's code
 "#
-    ).context("Couldn't write the default patch file")?;
+    )
+    .context("Couldn't write the default patch file")?;
 
     let mut file = OpenOptions::new()
         .append(true)
@@ -518,7 +550,8 @@ opt-level = 1
 panic = "abort"
 lto = true
 "#
-    ).context("Couldn't write into the Cargo.toml")?;
+    )
+    .context("Couldn't write into the Cargo.toml")?;
 
     let mut file = File::create(format!("{}/.gitignore", name))
         .context("Couldn't create the gitignore file")?;
@@ -527,7 +560,8 @@ lto = true
         r#"/target
 **/*.rs.bk
 "#
-    ).context("Couldn't write the gitignore file")?;
+    )
+    .context("Couldn't write the gitignore file")?;
 
     Ok(())
 }
@@ -552,7 +586,8 @@ fn find_compiled_library(debug: bool) -> Result<PathBuf, Error> {
         "target",
         "powerpc-unknown-linux-gnu",
         if debug { "debug" } else { "release" },
-    ])).context("Couldn't list entries of the compiler's target directory")?;
+    ]))
+    .context("Couldn't list entries of the compiler's target directory")?;
 
     for entry in dir {
         let entry = entry.context("Couldn't list an entry of the compiler's target directory")?;
