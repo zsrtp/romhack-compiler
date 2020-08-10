@@ -1,6 +1,6 @@
 [package]
 name = "romhack"
-version = "0.1.0"
+version = "0.1.2"
 authors = ["Christopher Serr <cryze92@gmail.com>"]
 
 [workspace]
