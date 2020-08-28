@@ -277,7 +277,7 @@ fn build_patch<P: KeyValPrint>(
 pub fn build_iso<'a, P: KeyValPrint, F: FileSource>(
     printer: &P,
     mut files: F,
-    original_iso: &'a [u8],
+    original_iso: &'a iso::IsoBuf,
     compiled_library: Vec<u8>,
     config: &'a mut Config,
 ) -> Result<Directory<'a>, Error> {
@@ -383,7 +383,7 @@ pub fn build_iso<'a, P: KeyValPrint, F: FileSource>(
             .context("Couldn't patch the game")?
             .into();
     }
-    {
+    if false {
         printer.print(None, "Patching", "banner");
 
         if let Some(banner_file) = iso.banner_mut() {
@@ -440,14 +440,25 @@ pub fn build_and_emit_iso<P: KeyValPrint, F: FileSource>(
 
     printer.print(None, "Building", "ISO");
 
-    iso::writer::write_iso(
-        BufWriter::with_capacity(
-            4 << 20,
-            File::create(out_path).context("Couldn't create the final ISO")?,
-        ),
-        &iso,
-    )
-    .context("Couldn't write the final ISO")?;
+    match buf {
+        iso::IsoBuf::Raw(_) => {
+            iso::writer::write_iso(
+                BufWriter::with_capacity(
+                    4 << 20,
+                    File::create(out_path).context("Couldn't create the final ISO")?,
+                ),
+                &iso,
+            )
+            .context("Couldn't write the final ISO")?;
+        }
+        iso::IsoBuf::Extracted(_) => {
+            iso::writer::write_fs(
+                out_path,
+                &iso,
+            )
+            .context("Couldn't write the final ISO")?;
+        }
+    }
 
     Ok(())
 }
