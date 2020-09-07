@@ -3,7 +3,7 @@ use super::{consts::*, FstEntry, FstNodeType, IsoBuf};
 use byteorder::{ByteOrder, BE};
 use failure::{Error, ResultExt};
 use std::fs;
-use std::io::{Read, Result as IOResult};
+use std::io::{Read};
 use std::path::{Path, PathBuf};
 use std::str;
 
@@ -13,6 +13,7 @@ pub fn load_iso_buf<P: AsRef<Path>>(path: &P) -> Result<IsoBuf, Error> {
     } else {
         let mut path_buf = PathBuf::new();
         path_buf.push(path);
+        path_buf.push("DATA");
         Ok(IsoBuf::Extracted(path_buf))
     }
 }
@@ -114,29 +115,29 @@ pub fn load_iso<'a>(buf: &'a IsoBuf) -> Result<Directory<'a>, Error> {
             let mut disc_data = Directory::new("&&discdata");
             let mut root_data = Directory::new("&&rootdata");
 
-            add_file_to_dir(&path, "cert.bin", "cert.bin", &mut root_data);
-            add_file_to_dir(&path, "h3.bin", "h3.bin", &mut root_data);
-            add_file_to_dir(&path, "ticket.bin", "ticket.bin", &mut root_data);
-            add_file_to_dir(&path, "tmd.bin", "tmd.bin", &mut root_data);
+            add_file_to_dir(&path, "cert.bin", "cert.bin", &mut root_data)?;
+            add_file_to_dir(&path, "h3.bin", "h3.bin", &mut root_data)?;
+            add_file_to_dir(&path, "ticket.bin", "ticket.bin", &mut root_data)?;
+            add_file_to_dir(&path, "tmd.bin", "tmd.bin", &mut root_data)?;
 
             root_dir.children.push(Node::Directory(Box::new(root_data)));
             
             let mut sys_path = path.clone();
             sys_path.push("sys");
 
-            add_file_to_dir(&sys_path, "bi2.bin", "iso.hdr", &mut sys_data);
-            add_file_to_dir(&sys_path, "apploader.img", "AppLoader.ldr", &mut sys_data);
-            add_file_to_dir(&sys_path, "main.dol", "Start.dol", &mut sys_data);
-            add_file_to_dir(&sys_path, "boot.bin", "Game.toc", &mut sys_data);
-            add_file_to_dir(&sys_path, "fst.bin", "fst.bin", &mut sys_data);
+            add_file_to_dir(&sys_path, "bi2.bin", "iso.hdr", &mut sys_data)?;
+            add_file_to_dir(&sys_path, "apploader.img", "AppLoader.ldr", &mut sys_data)?;
+            add_file_to_dir(&sys_path, "main.dol", "Start.dol", &mut sys_data)?;
+            add_file_to_dir(&sys_path, "boot.bin", "Game.toc", &mut sys_data)?;
+            add_file_to_dir(&sys_path, "fst.bin", "fst.bin", &mut sys_data)?;
             
             root_dir.children.push(Node::Directory(Box::new(sys_data)));
 
             let mut disc_path = path.clone();
             disc_path.push("disc");
 
-            add_file_to_dir(&disc_path, "header.bin", "header.bin", &mut disc_data);
-            add_file_to_dir(&disc_path, "region.bin", "region.bin", &mut disc_data);
+            add_file_to_dir(&disc_path, "header.bin", "header.bin", &mut disc_data)?;
+            add_file_to_dir(&disc_path, "region.bin", "region.bin", &mut disc_data)?;
 
             root_dir.children.push(Node::Directory(Box::new(disc_data)));
 

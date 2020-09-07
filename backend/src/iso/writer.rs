@@ -117,31 +117,33 @@ where
 }
 
 pub fn write_fs(path: PathBuf, root: &Directory) -> Result<(), Error> {
-    fs::create_dir_all(&path);
+    let mut path = path.clone();
+    path.push("DATA");
+    fs::create_dir_all(&path)?;
     // TODO Write the function
-    let (root_index, root_dir, _) = write_data_dir(None, "&&rootdata", root, &path)?;
+    let (_root_index, root_dir, _) = write_data_dir(None, "&&rootdata", root, &path)?;
 
-    write_data_file(&path, "cert.bin", "cert.bin", &root_dir);
-    write_data_file(&path, "h3.bin", "h3.bin", &root_dir);
-    write_data_file(&path, "ticket.bin", "ticket.bin", &root_dir);
-    write_data_file(&path, "tmd.bin", "tmd.bin", &root_dir);
+    write_data_file(&path, "cert.bin", "cert.bin", &root_dir)?;
+    write_data_file(&path, "h3.bin", "h3.bin", &root_dir)?;
+    write_data_file(&path, "ticket.bin", "ticket.bin", &root_dir)?;
+    write_data_file(&path, "tmd.bin", "tmd.bin", &root_dir)?;
 
     let (sys_index, sys_dir, sys_path) = write_data_dir(Some("sys"), "&&systemdata", root, &path)?;
 
-    write_data_file(&sys_path, "bi2.bin", "iso.hdr", &sys_dir);
-    write_data_file(&sys_path, "apploader.img", "AppLoader.ldr", &sys_dir);
-    write_data_file(&sys_path, "main.dol", "Start.dol", &sys_dir);
-    write_data_file(&sys_path, "boot.bin", "Game.toc", &sys_dir);
-    write_data_file(&sys_path, "fst.bin", "fst.bin", &sys_dir);
+    write_data_file(&sys_path, "bi2.bin", "iso.hdr", &sys_dir)?;
+    write_data_file(&sys_path, "apploader.img", "AppLoader.ldr", &sys_dir)?;
+    write_data_file(&sys_path, "main.dol", "Start.dol", &sys_dir)?;
+    write_data_file(&sys_path, "boot.bin", "Game.toc", &sys_dir)?;
+    write_data_file(&sys_path, "fst.bin", "fst.bin", &sys_dir)?;
 
-    let (disc_index, disc_dir, disc_path) = write_data_dir(Some("disc"), "&&discdata", root, &path)?;
+    let (_disc_index, disc_dir, disc_path) = write_data_dir(Some("disc"), "&&discdata", root, &path)?;
 
-    write_data_file(&disc_path, "header.bin", "header.bin", &disc_dir);
-    write_data_file(&disc_path, "region.bin", "region.bin", &disc_dir);
+    write_data_file(&disc_path, "header.bin", "header.bin", &disc_dir)?;
+    write_data_file(&disc_path, "region.bin", "region.bin", &disc_dir)?;
 
     let mut files_path = path.clone();
     files_path.push("files");
-    fs::create_dir_all(&files_path);
+    fs::create_dir_all(&files_path)?;
     for (_, node) in root
         .children
         .iter()
@@ -165,7 +167,7 @@ fn write_data_dir<'a>(dir_fs_name: Option<&str>, dir_given_name: &str, parent_di
     let mut dir_path = path.clone();
     if let Some(dir_fs_name) = dir_fs_name {
         dir_path.push(dir_fs_name);
-        fs::create_dir_all(&dir_path);
+        fs::create_dir_all(&dir_path)?;
     }
     Ok((dir_index, dir, dir_path))
 }

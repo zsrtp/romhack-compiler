@@ -53,7 +53,7 @@ fn try_main() -> Result<(), Error> {
 
     match opt {
         Opt::Build { debug, patch, raw } => {
-            if(raw) {
+            if raw {
                 build_raw(&TermPrinter, patch).context("Couldn't build the Rom Hack")?
             } else {
                 build(&TermPrinter, debug, patch).context("Couldn't build the Rom Hack")?
