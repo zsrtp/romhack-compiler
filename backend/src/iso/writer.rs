@@ -3,7 +3,7 @@ use super::{consts::*, FstEntry, FstNodeType};
 use byteorder::{WriteBytesExt, BE};
 use failure::{err_msg, Error, ResultExt};
 use std::io::{Seek, SeekFrom, Write};
-use std::path::{Path, PathBuf};
+use std::path::{PathBuf};
 use std::fs;
 
 pub fn write_iso<W>(mut writer: W, root: &Directory) -> Result<(), Error>

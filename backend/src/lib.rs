@@ -317,7 +317,7 @@ pub fn build_iso<'a, P: KeyValPrint, F: FileSource>(
     libs_to_link.push(compiled_library);
 
     for lib_path in config.link.libs.iter().flat_map(|x| x) {
-        let mut file_buf = files.read_to_vec(lib_path).with_context(|_| {
+        let file_buf = files.read_to_vec(lib_path).with_context(|_| {
             format!(
                 "Couldn't load \"{}\". Did you build the project correctly?",
                 lib_path.display()
