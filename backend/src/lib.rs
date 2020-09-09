@@ -383,7 +383,7 @@ pub fn build_iso<'a, P: KeyValPrint, F: FileSource>(
             .context("Couldn't patch the game")?
             .into();
     }
-    if false {
+    if iso.is_gamecube_iso() {
         printer.print(None, "Patching", "banner");
 
         if let Some(banner_file) = iso.banner_mut() {

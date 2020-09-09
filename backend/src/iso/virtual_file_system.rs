@@ -1,4 +1,5 @@
 use std::borrow::Cow;
+use std::cmp;
 
 #[derive(Debug)]
 pub enum Node<'a> {
@@ -75,6 +76,34 @@ impl<'a> Directory<'a> {
             .filter_map(|c| c.as_file_mut())
             .find(|f| f.name == "opening.bnr")?;
         Some(banner)
+    }
+
+    pub fn is_gamecube_iso(&self) -> bool {
+        if let Some(file) = self.resolve_path("&&systemdata/iso.hdr") {
+            let magic: Vec<u8> = file.data[0x1C..0x20].to_owned();
+            let gc_magic: Vec<u8> = vec![0xc2, 0x33, 0x9f, 0x3d];
+            cmp::Ordering::Equal == magic.iter()
+                .zip(gc_magic)
+                .map(|(x, y)| x.cmp(&y))
+                .find(|&ord| ord != cmp::Ordering::Equal)
+                .unwrap_or(magic.len().cmp(&4))
+        } else {
+            false
+        }
+    }
+
+    pub fn is_wii_iso(&self) -> bool {
+        if let Some(file) = self.resolve_path("&&systemdata/iso.hdr") {
+            let magic: Vec<u8> = file.data[0x18..0x1C].to_owned();
+            let wii_magic: Vec<u8> = vec![0x5D, 0x1C, 0x9E, 0xA3];
+            cmp::Ordering::Equal == magic.iter()
+                .zip(wii_magic)
+                .map(|(x, y)| x.cmp(&y))
+                .find(|&ord| ord != cmp::Ordering::Equal)
+                .unwrap_or(magic.len().cmp(&4))
+        } else {
+            false
+        }
     }
 
     pub fn resolve_path(&self, path: &str) -> Option<&File<'a>> {
