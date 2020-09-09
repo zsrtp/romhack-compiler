@@ -121,7 +121,7 @@ pub fn write_fs(path: PathBuf, root: &Directory) -> Result<(), Error> {
     path.push("DATA");
     fs::create_dir_all(&path)?;
     // TODO Write the function
-    let (_root_index, root_dir, _) = write_data_dir(None, "&&rootdata", root, &path)?;
+    let (root_index, root_dir, _) = write_data_dir(None, "&&rootdata", root, &path)?;
 
     write_data_file(&path, "cert.bin", "cert.bin", &root_dir)?;
     write_data_file(&path, "h3.bin", "h3.bin", &root_dir)?;
@@ -130,13 +130,13 @@ pub fn write_fs(path: PathBuf, root: &Directory) -> Result<(), Error> {
 
     let (sys_index, sys_dir, sys_path) = write_data_dir(Some("sys"), "&&systemdata", root, &path)?;
 
-    write_data_file(&sys_path, "bi2.bin", "iso.hdr", &sys_dir)?;
+    write_data_file(&sys_path, "boot.bin", "iso.hdr", &sys_dir)?;
     write_data_file(&sys_path, "apploader.img", "AppLoader.ldr", &sys_dir)?;
     write_data_file(&sys_path, "main.dol", "Start.dol", &sys_dir)?;
-    write_data_file(&sys_path, "boot.bin", "Game.toc", &sys_dir)?;
-    write_data_file(&sys_path, "fst.bin", "fst.bin", &sys_dir)?;
+    write_data_file(&sys_path, "fst.bin", "Game.toc", &sys_dir)?;
+    write_data_file(&sys_path, "bi2.bin", "bi2.bin", &sys_dir)?;
 
-    let (_disc_index, disc_dir, disc_path) = write_data_dir(Some("disc"), "&&discdata", root, &path)?;
+    let (disc_index, disc_dir, disc_path) = write_data_dir(Some("disc"), "&&discdata", root, &path)?;
 
     write_data_file(&disc_path, "header.bin", "header.bin", &disc_dir)?;
     write_data_file(&disc_path, "region.bin", "region.bin", &disc_dir)?;
@@ -148,7 +148,7 @@ pub fn write_fs(path: PathBuf, root: &Directory) -> Result<(), Error> {
         .children
         .iter()
         .enumerate()
-        .filter(|&(i, _)| i != sys_index)
+        .filter(|&(i, _)| i != root_index && i != sys_index && i != disc_index)
     {
         write_files_recursive(node, &files_path)?;
     }

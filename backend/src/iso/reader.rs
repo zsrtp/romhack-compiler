@@ -125,11 +125,11 @@ pub fn load_iso<'a>(buf: &'a IsoBuf) -> Result<Directory<'a>, Error> {
             let mut sys_path = path.clone();
             sys_path.push("sys");
 
-            add_file_to_dir(&sys_path, "bi2.bin", "iso.hdr", &mut sys_data)?;
+            add_file_to_dir(&sys_path, "boot.bin", "iso.hdr", &mut sys_data)?;
             add_file_to_dir(&sys_path, "apploader.img", "AppLoader.ldr", &mut sys_data)?;
             add_file_to_dir(&sys_path, "main.dol", "Start.dol", &mut sys_data)?;
-            add_file_to_dir(&sys_path, "boot.bin", "Game.toc", &mut sys_data)?;
-            add_file_to_dir(&sys_path, "fst.bin", "fst.bin", &mut sys_data)?;
+            add_file_to_dir(&sys_path, "fst.bin", "Game.toc", &mut sys_data)?;
+            add_file_to_dir(&sys_path, "bi2.bin", "bi2.bin", &mut sys_data)?;
             
             root_dir.children.push(Node::Directory(Box::new(sys_data)));
 
