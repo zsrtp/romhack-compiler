@@ -13,7 +13,6 @@ pub fn load_iso_buf<P: AsRef<Path>>(path: &P) -> Result<IsoBuf, Error> {
     } else {
         let mut path_buf = PathBuf::new();
         path_buf.push(path);
-        path_buf.push("DATA");
         Ok(IsoBuf::Extracted(path_buf))
     }
 }
@@ -111,40 +110,48 @@ pub fn load_iso<'a>(buf: &'a IsoBuf) -> Result<Directory<'a>, Error> {
         }
         IsoBuf::Extracted(path) => {
             let mut root_dir = Directory::new("root");
-            let mut sys_data = Directory::new("&&systemdata");
-            let mut disc_data = Directory::new("&&discdata");
-            let mut root_data = Directory::new("&&rootdata");
 
-            add_file_to_dir(&path, "cert.bin", "cert.bin", &mut root_data)?;
-            add_file_to_dir(&path, "h3.bin", "h3.bin", &mut root_data)?;
-            add_file_to_dir(&path, "ticket.bin", "ticket.bin", &mut root_data)?;
-            add_file_to_dir(&path, "tmd.bin", "tmd.bin", &mut root_data)?;
-
-            root_dir.children.push(Node::Directory(Box::new(root_data)));
-            
             let mut sys_path = path.clone();
             sys_path.push("sys");
-
-            add_file_to_dir(&sys_path, "boot.bin", "iso.hdr", &mut sys_data)?;
-            add_file_to_dir(&sys_path, "apploader.img", "AppLoader.ldr", &mut sys_data)?;
-            add_file_to_dir(&sys_path, "main.dol", "Start.dol", &mut sys_data)?;
-            add_file_to_dir(&sys_path, "fst.bin", "Game.toc", &mut sys_data)?;
-            add_file_to_dir(&sys_path, "bi2.bin", "bi2.bin", &mut sys_data)?;
-            
-            root_dir.children.push(Node::Directory(Box::new(sys_data)));
-
             let mut disc_path = path.clone();
             disc_path.push("disc");
-
-            add_file_to_dir(&disc_path, "header.bin", "header.bin", &mut disc_data)?;
-            add_file_to_dir(&disc_path, "region.bin", "region.bin", &mut disc_data)?;
-
-            root_dir.children.push(Node::Directory(Box::new(disc_data)));
-
             let mut files_path = path.clone();
             files_path.push("files");
 
-            get_dir_structure_recursive_fs(files_path, &mut root_dir)?;
+            if path.read_dir()?
+            .filter(|e| e.as_ref().map_or(None, |entry| entry.metadata().ok()).map_or(false, |m| m.is_file()))
+            .count() > 0 {
+                let mut root_data = Directory::new("&&rootdata");
+                let mut exclude: Vec<&PathBuf> = Vec::new();
+                exclude.push(&sys_path);
+                exclude.push(&disc_path);
+                exclude.push(&files_path);
+                get_dir_structure_recursive_fs(path, &mut root_data, Some(exclude))?;
+
+                root_dir.children.push(Node::Directory(Box::new(root_data)));
+            }
+
+            if sys_path.exists() {
+                let mut sys_data = Directory::new("&&systemdata");
+
+                add_file_to_dir(&sys_path, "boot.bin", "iso.hdr", &mut sys_data)?;
+                add_file_to_dir(&sys_path, "apploader.img", "AppLoader.ldr", &mut sys_data)?;
+                add_file_to_dir(&sys_path, "main.dol", "Start.dol", &mut sys_data)?;
+                add_file_to_dir(&sys_path, "fst.bin", "Game.toc", &mut sys_data)?;
+                add_file_to_dir(&sys_path, "bi2.bin", "bi2.bin", &mut sys_data)?;
+
+                root_dir.children.push(Node::Directory(Box::new(sys_data)));
+            }
+
+            if disc_path.exists() {
+                let mut disc_data = Directory::new("&&discdata");
+
+                get_dir_structure_recursive_fs(&disc_path, &mut disc_data, None)?;
+
+                root_dir.children.push(Node::Directory(Box::new(disc_data)));
+            }
+
+            get_dir_structure_recursive_fs(&files_path, &mut root_dir, None)?;
 
             Ok(root_dir)
         }
@@ -185,13 +192,16 @@ fn get_dir_structure_recursive<'a>(
     cur_index
 }
 
-fn get_dir_structure_recursive_fs<'a>(path: PathBuf, parent_dir: &mut Directory<'a>) -> Result<(), Error> {
-    for entry in path.read_dir().context(format!("Couldn't read dir of \"{:?}\"", path.to_str()))? {
+fn get_dir_structure_recursive_fs<'a>(path: &PathBuf, parent_dir: &mut Directory<'a>, exclude: Option<Vec<&PathBuf>>) -> Result<(), Error> {
+    let excluded = exclude.clone().unwrap_or(Vec::new());
+    for entry in path.read_dir().context(format!("Couldn't read dir of \"{:?}\"", path.to_str()))?
+        .filter(|e| e.as_ref().map_or(false, |entry| !excluded.contains(&&entry.path())))
+    {
         let entry = entry?;
         let filename = entry.file_name();
         if entry.metadata().context(format!("Couldn't fetch metadata of entry \"{:?}\"", entry.path().to_str()))?.is_dir() {
             let mut dir = Directory::new(filename.to_str().unwrap());
-            get_dir_structure_recursive_fs(entry.path(), &mut dir)?;
+            get_dir_structure_recursive_fs(&entry.path(), &mut dir, exclude.clone())?;
             parent_dir.children.push(Node::Directory(Box::new(dir)));
         } else {
             parent_dir.children.push(Node::File(File::new(filename.to_str().unwrap(), read_binary(&entry.path())?)));

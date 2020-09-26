@@ -116,30 +116,46 @@ where
     Ok(())
 }
 
-pub fn write_fs(path: PathBuf, root: &Directory) -> Result<(), Error> {
-    let mut path = path.clone();
-    path.push("DATA");
+pub fn write_fs<'a>(path: PathBuf, root: &Directory<'a>) -> Result<(), Error> {
+    let path = path.clone();
     fs::create_dir_all(&path)?;
-    // TODO Write the function
+    let mut exculded_index: Vec<usize> = Vec::new();
+
     let (root_index, root_dir, _) = write_data_dir(None, "&&rootdata", root, &path)?;
+    exculded_index.push(root_index);
+    if root.children.iter().map(|child| child.name()).collect::<Vec<&String>>().contains(&&String::from("&&rootdata")) {
+        for (_, node) in root_dir
+            .children
+            .iter()
+            .enumerate()
+        {
+            write_files_recursive(node, &path)?;
+        }
+    }
 
-    write_data_file(&path, "cert.bin", "cert.bin", &root_dir)?;
-    write_data_file(&path, "h3.bin", "h3.bin", &root_dir)?;
-    write_data_file(&path, "ticket.bin", "ticket.bin", &root_dir)?;
-    write_data_file(&path, "tmd.bin", "tmd.bin", &root_dir)?;
+    if root.children.iter().map(|child| child.name()).collect::<Vec<&String>>().contains(&&String::from("&&systemdata")) {
+        let (sys_index, sys_dir, sys_path) = write_data_dir(Some("sys"), "&&systemdata", root, &path)?;
+        exculded_index.push(sys_index);
 
-    let (sys_index, sys_dir, sys_path) = write_data_dir(Some("sys"), "&&systemdata", root, &path)?;
+        write_data_file(&sys_path, "boot.bin", "iso.hdr", &sys_dir)?;
+        write_data_file(&sys_path, "apploader.img", "AppLoader.ldr", &sys_dir)?;
+        write_data_file(&sys_path, "main.dol", "Start.dol", &sys_dir)?;
+        write_data_file(&sys_path, "fst.bin", "Game.toc", &sys_dir)?;
+        write_data_file(&sys_path, "bi2.bin", "bi2.bin", &sys_dir)?;
+    }
 
-    write_data_file(&sys_path, "boot.bin", "iso.hdr", &sys_dir)?;
-    write_data_file(&sys_path, "apploader.img", "AppLoader.ldr", &sys_dir)?;
-    write_data_file(&sys_path, "main.dol", "Start.dol", &sys_dir)?;
-    write_data_file(&sys_path, "fst.bin", "Game.toc", &sys_dir)?;
-    write_data_file(&sys_path, "bi2.bin", "bi2.bin", &sys_dir)?;
+    if root.children.iter().map(|child| child.name()).collect::<Vec<&String>>().contains(&&String::from("&&discdata")) {
+        let (disc_index, disc_dir, disc_path) = write_data_dir(Some("disc"), "&&discdata", root, &path)?;
+        exculded_index.push(disc_index);
 
-    let (disc_index, disc_dir, disc_path) = write_data_dir(Some("disc"), "&&discdata", root, &path)?;
-
-    write_data_file(&disc_path, "header.bin", "header.bin", &disc_dir)?;
-    write_data_file(&disc_path, "region.bin", "region.bin", &disc_dir)?;
+        for (_, sub_node) in disc_dir
+            .children
+            .iter()
+            .enumerate()
+        {
+            write_files_recursive(sub_node, &disc_path)?;
+        }
+    }
 
     let mut files_path = path.clone();
     files_path.push("files");
@@ -148,7 +164,7 @@ pub fn write_fs(path: PathBuf, root: &Directory) -> Result<(), Error> {
         .children
         .iter()
         .enumerate()
-        .filter(|&(i, _)| i != root_index && i != sys_index && i != disc_index)
+        .filter(|&(i, _)| !exculded_index.contains(&i))
     {
         write_files_recursive(node, &files_path)?;
     }

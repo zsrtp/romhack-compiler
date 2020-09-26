@@ -8,6 +8,13 @@ pub enum Node<'a> {
 }
 
 impl<'a> Node<'a> {
+    pub fn name(&self) -> &String {
+        match self {
+            Node::Directory(dir) => &dir.name,
+            Node::File(file) => &file.name,
+        }
+    }
+
     pub fn as_directory(&self) -> Option<&Directory<'a>> {
         if let &Node::Directory(ref dir) = self {
             Some(dir)
