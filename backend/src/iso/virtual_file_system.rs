@@ -137,7 +137,7 @@ impl<'a> Directory<'a> {
     }
 
     // TODO NLL This is really bad
-    pub fn resolve_and_create_path(&mut self, path: &'a str) -> &mut File<'a> {
+    pub fn resolve_and_create_path(&mut self, path: &String) -> &mut File<'a> {
         let mut splits = path.splitn(2, '/');
         if let (Some(folder), Some(sub_path)) = (splits.next(), splits.next()) {
             if !self
@@ -154,20 +154,20 @@ impl<'a> Directory<'a> {
                 .filter_map(|c| c.as_directory_mut())
                 .find(|d| d.name == folder)
                 .unwrap()
-                .resolve_and_create_path(sub_path)
+                .resolve_and_create_path(&String::from(sub_path))
         } else {
             if !self
                 .children
                 .iter_mut()
                 .filter_map(|c| c.as_file_mut())
-                .any(|f| f.name == path)
+                .any(|f| f.name == *path)
             {
                 self.children.push(Node::File(File::new(path, Vec::new())));
             }
             self.children
                 .iter_mut()
                 .filter_map(|c| c.as_file_mut())
-                .find(|f| f.name == path)
+                .find(|f| f.name == *path)
                 .unwrap()
         }
     }
