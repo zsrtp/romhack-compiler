@@ -1,4 +1,5 @@
 use std::borrow::Cow;
+use std::cmp;
 
 #[derive(Debug)]
 pub enum Node<'a> {
@@ -7,6 +8,13 @@ pub enum Node<'a> {
 }
 
 impl<'a> Node<'a> {
+    pub fn name(&self) -> &String {
+        match self {
+            Node::Directory(dir) => &dir.name,
+            Node::File(file) => &file.name,
+        }
+    }
+
     pub fn as_directory(&self) -> Option<&Directory<'a>> {
         if let &Node::Directory(ref dir) = self {
             Some(dir)
@@ -42,14 +50,14 @@ impl<'a> Node<'a> {
 
 #[derive(Debug)]
 pub struct Directory<'a> {
-    pub name: &'a str,
+    pub name: String,
     pub children: Vec<Node<'a>>,
 }
 
 impl<'a> Directory<'a> {
-    pub fn new(name: &'a str) -> Directory<'a> {
+    pub fn new(name: &str) -> Directory<'a> {
         Self {
-            name,
+            name: String::from(name),
             children: Vec::new(),
         }
     }
@@ -77,6 +85,34 @@ impl<'a> Directory<'a> {
         Some(banner)
     }
 
+    pub fn is_gamecube_iso(&self) -> bool {
+        if let Some(file) = self.resolve_path("&&systemdata/iso.hdr") {
+            let magic: Vec<u8> = file.data[0x1C..0x20].to_owned();
+            let gc_magic: Vec<u8> = vec![0xc2, 0x33, 0x9f, 0x3d];
+            cmp::Ordering::Equal == magic.iter()
+                .zip(gc_magic)
+                .map(|(x, y)| x.cmp(&y))
+                .find(|&ord| ord != cmp::Ordering::Equal)
+                .unwrap_or(magic.len().cmp(&4))
+        } else {
+            false
+        }
+    }
+
+    pub fn is_wii_iso(&self) -> bool {
+        if let Some(file) = self.resolve_path("&&systemdata/iso.hdr") {
+            let magic: Vec<u8> = file.data[0x18..0x1C].to_owned();
+            let wii_magic: Vec<u8> = vec![0x5D, 0x1C, 0x9E, 0xA3];
+            cmp::Ordering::Equal == magic.iter()
+                .zip(wii_magic)
+                .map(|(x, y)| x.cmp(&y))
+                .find(|&ord| ord != cmp::Ordering::Equal)
+                .unwrap_or(magic.len().cmp(&4))
+        } else {
+            false
+        }
+    }
+
     pub fn resolve_path(&self, path: &str) -> Option<&File<'a>> {
         let mut dir = self;
         let mut segments = path.split('/').peekable();
@@ -101,7 +137,7 @@ impl<'a> Directory<'a> {
     }
 
     // TODO NLL This is really bad
-    pub fn resolve_and_create_path(&mut self, path: &'a str) -> &mut File<'a> {
+    pub fn resolve_and_create_path(&mut self, path: &String) -> &mut File<'a> {
         let mut splits = path.splitn(2, '/');
         if let (Some(folder), Some(sub_path)) = (splits.next(), splits.next()) {
             if !self
@@ -118,34 +154,34 @@ impl<'a> Directory<'a> {
                 .filter_map(|c| c.as_directory_mut())
                 .find(|d| d.name == folder)
                 .unwrap()
-                .resolve_and_create_path(sub_path)
+                .resolve_and_create_path(&String::from(sub_path))
         } else {
             if !self
                 .children
                 .iter_mut()
                 .filter_map(|c| c.as_file_mut())
-                .any(|f| f.name == path)
+                .any(|f| f.name == *path)
             {
                 self.children.push(Node::File(File::new(path, Vec::new())));
             }
             self.children
                 .iter_mut()
                 .filter_map(|c| c.as_file_mut())
-                .find(|f| f.name == path)
+                .find(|f| f.name == *path)
                 .unwrap()
         }
     }
 }
 
 pub struct File<'a> {
-    pub name: &'a str,
+    pub name: String,
     pub data: Cow<'a, [u8]>,
 }
 
 impl<'a> File<'a> {
-    pub fn new<A: Into<Cow<'a, [u8]>>>(name: &'a str, data: A) -> File<'a> {
+    pub fn new<A: Into<Cow<'a, [u8]>>>(name: &str, data: A) -> File<'a> {
         Self {
-            name,
+            name: String::from(name),
             data: data.into(),
         }
     }

@@ -104,7 +104,7 @@ impl<'a> Assembler<'a> {
     }
 
     fn parse_program_counter_label(&self, line: &str) -> Result<u32, Error> {
-        let mut line = line[..line.len() - 1].trim_left();
+        let mut line = line[..line.len() - 1].trim_start();
         let mut address = 0u32;
         let mut is_add = true;
         loop {
@@ -113,11 +113,11 @@ impl<'a> Assembler<'a> {
                 .next()
                 .ok_or_else(|| err_msg("Expected integer literal or symbol"))?
             {
-                '0'...'9' | '-' => {
+                '0'..='9' | '-' => {
                     let len = line
                         .char_indices()
                         .take_while(|&(i, c)| match c {
-                            '0'...'9' | 'A'...'F' | 'a'...'f' | '_' => true,
+                            '0'..='9' | 'A'..='F' | 'a'..='f' | '_' => true,
                             '-' if i == 0 => true,
                             'x' if i == 1 => true,
                             _ => false,
@@ -157,14 +157,14 @@ impl<'a> Assembler<'a> {
             } else {
                 address.wrapping_sub(val)
             };
-            line = line.trim_left();
+            line = line.trim_start();
             is_add = match line.chars().next() {
                 Some('+') => true,
                 Some('-') => false,
                 None => return Ok(address),
                 _ => bail!("Expected + or - operator but found \"{}\"", line),
             };
-            line = line[1..].trim_left();
+            line = line[1..].trim_start();
         }
     }
 }
