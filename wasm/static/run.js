@@ -1,4 +1,4 @@
-const compiledModule = fetch("romhack.wasm").then((r) => r.arrayBuffer()).then((b) => WebAssembly.compile(b));
+const compiledModule = fetch("romhack_bg.wasm").then((r) => r.arrayBuffer()).then((b) => WebAssembly.compile(b));
 
 let decodeUtf8;
 if (typeof window["TextDecoder"] === "undefined") {
@@ -182,15 +182,15 @@ async function run() {
     }
 
     let wasm = await WebAssembly.instantiate(await compiledModule, {
-        env: {
-            count_write: countWrite,
-            count_seek: seek,
-            restart,
-            write,
-            seek,
-            key_val_print: keyValPrintPtr,
-            set_name: setName,
-            error,
+        "./romhack_bg.js": {
+            __wbg_keyvalprint_5e5ef5c7eb6e479e: keyValPrintPtr,
+            __wbg_setname_02bdb79cade7c440: setName,
+            __wbg_countwrite_928e00efa24220c3: countWrite,
+            __wbg_countseek_38683a43834f1cc4: seek,
+            __wbg_restart_63db13fd1ed677d1: restart,
+            __wbg_write_587d3269d1025ba1: write,
+            __wbg_seek_7b2147db9ade23b6: seek,
+            __wbg_error_b3f2bb3d1fb25132: error,
         },
     });
     context.wasm = wasm;

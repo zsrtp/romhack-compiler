@@ -1,5 +1,6 @@
 extern crate failure;
 extern crate romhack_backend;
+extern crate wasm_bindgen;
 
 use failure::Error;
 use romhack_backend::{
@@ -8,7 +9,9 @@ use romhack_backend::{
 use std::alloc::{alloc as allocate, dealloc as deallocate, Layout};
 use std::io::{self, BufWriter, Cursor, SeekFrom, Write};
 use std::slice::from_raw_parts;
+use wasm_bindgen::prelude::*;
 
+#[wasm_bindgen]
 extern "C" {
     fn count_write(buf_len: usize);
     fn count_seek(kind: u8, offset: isize) -> usize;
@@ -90,34 +93,44 @@ impl io::Seek for RomHackCounter {
 }
 
 #[no_mangle]
-pub unsafe extern "C" fn alloc(size: usize) -> *mut u8 {
-    allocate(Layout::from_size_align_unchecked(size, 1))
+#[wasm_bindgen]
+pub extern "C" fn alloc(size: usize) -> *mut u8 {
+    unsafe {
+        allocate(Layout::from_size_align_unchecked(size, 1))
+    }
 }
 
 #[no_mangle]
-pub unsafe extern "C" fn dealloc(ptr: *mut u8, size: usize) {
-    deallocate(ptr, Layout::from_size_align_unchecked(size, 1))
+#[wasm_bindgen]
+pub extern "C" fn dealloc(ptr: *mut u8, size: usize) {
+    unsafe {
+        deallocate(ptr, Layout::from_size_align_unchecked(size, 1))
+    }
 }
 
+
 #[no_mangle]
-pub unsafe extern "C" fn create_romhack(
+#[wasm_bindgen]
+pub extern "C" fn create_romhack(
     patch_ptr: *const u8,
     patch_len: usize,
     iso_ptr: *const u8,
     iso_len: usize,
 ) -> bool {
-    let patch = from_raw_parts(patch_ptr, patch_len);
-    let iso = from_raw_parts(iso_ptr, iso_len);
-    if let Err(e) = try_create_romhack(patch, iso) {
-        let mut buf = Vec::new();
-        for cause in e.iter_chain() {
-            buf.clear();
-            write!(buf, "{}", cause).unwrap();
-            error(buf.as_ptr(), buf.len());
+    unsafe {
+        let patch = from_raw_parts(patch_ptr, patch_len);
+        let iso = from_raw_parts(iso_ptr, iso_len);
+        if let Err(e) = try_create_romhack(patch, iso) {
+            let mut buf = Vec::new();
+            for cause in e.iter_chain() {
+                buf.clear();
+                write!(buf, "{}", cause).unwrap();
+                error(buf.as_ptr(), buf.len());
+            }
+            false
+        } else {
+            true
         }
-        false
-    } else {
-        true
     }
 }
 
