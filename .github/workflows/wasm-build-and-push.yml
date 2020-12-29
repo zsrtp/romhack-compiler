@@ -1,0 +1,24 @@
+name: Build and Push WASM
+
+on:
+  push:
+    branches:
+      - gh_release
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+
+    steps:
+      - uses: actions/checkout@v1
+      - uses: icepuma/rust-action@master
+        with:
+          args: cargo install wasm-pack && cd wasm && wasm-pack build
+      - uses: shallwefootball/s3-upload-action@master
+        name: Upload S3
+        id: S3
+        with:
+          aws_key_id: ${{ secrets.AWS_ACCESS_KEY_ID }}
+          aws_secret_access_key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
+          aws_bucket: ${{ secrets.AWS_S3_BUCKET }}
+          source_dir: 'wasm/pkg/romhack_bg.wasm'
