@@ -1,0 +1,14 @@
+name: WASM Build Check
+
+on:
+  pull_request: 
+    branches: [ master ]
+
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+    steps:
+    - uses: actions/checkout@v2
+
+    - name: WASM Build Check 
+      run: curl https://rustwasm.github.io/wasm-pack/installer/init.sh -sSf | sh && cd wasm && wasm-pack build
