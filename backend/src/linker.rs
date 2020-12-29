@@ -31,7 +31,7 @@ fn reloc_table_for_section<'a>(section_index: usize, elf: &'a Elf) -> Option<&'a
 fn function_symbols_for_section<'a>(
     section_index: usize,
     elf: &'a Elf,
-) -> Box<Iterator<Item = sym::Sym> + 'a> {
+) -> Box<dyn Iterator<Item = sym::Sym> + 'a> {
     Box::new(
         elf.syms
             .iter()

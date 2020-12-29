@@ -174,6 +174,50 @@ pub fn open_config_from_patch<R: Read + Seek>(
     Ok((zip, buffer, config))
 }
 
+fn add_file_to_zip(
+    index: usize,
+    iso_path: &String,
+    actual_path: &PathBuf,
+    zip: &mut ZipWriter<BufWriter<File>>,
+    new_map: &mut HashMap<String, PathBuf>
+) -> Result<(), Error> {
+    let zip_path = format!("replace{}.dat", index);
+    new_map.insert(iso_path.clone(), PathBuf::from(&zip_path));
+    zip.start_file(zip_path, FileOptions::default())
+        .context("Failed creating a new patch file entry")?;
+
+    zip.write_all(&fs::read(actual_path).with_context(|_| {
+        format!(
+            "Couldn't read the file \"{}\" to store it in the patch.",
+            actual_path.display()
+        )
+    })?)
+    .context("Failed storing a file in the patch")?;
+    Ok(())
+}
+
+fn add_entry_to_zip(
+    index: &mut usize,
+    iso_path: &String,
+    actual_path: &PathBuf,
+    zip: &mut ZipWriter<BufWriter<File>>,
+    new_map: &mut HashMap<String, PathBuf>
+) -> Result<(), Error> {
+    if actual_path.is_file() {
+        *index = *index + 1;
+        add_file_to_zip(*index, iso_path, actual_path, zip, new_map)?;
+    } else if actual_path.is_dir() {
+        for entry in fs::read_dir(actual_path)? {
+            let entry = entry?;
+            let entry_path = entry.path();
+            let file_name = entry_path.file_name().expect("Entry has no name");
+            let iso_path = String::from(iso_path) + &String::from('/') + &String::from(file_name.to_str().unwrap());
+            add_entry_to_zip(index, &iso_path, &entry_path, zip, new_map)?;
+        }
+    }
+    Ok(())
+}
+
 fn build_patch<P: KeyValPrint>(
     printer: &P,
     compiled_library: Vec<u8>,
@@ -189,19 +233,9 @@ fn build_patch<P: KeyValPrint>(
     printer.print(None, "Storing", "replacement files");
 
     let mut new_map = HashMap::new();
-    for (index, (iso_path, actual_path)) in config.files.iter().enumerate() {
-        let zip_path = format!("replace{}.dat", index);
-        new_map.insert(iso_path.clone(), PathBuf::from(&zip_path));
-        zip.start_file(zip_path, FileOptions::default())
-            .context("Failed creating a new patch file entry")?;
-
-        zip.write_all(&fs::read(actual_path).with_context(|_| {
-            format!(
-                "Couldn't read the file \"{}\" to store it in the patch.",
-                actual_path.display()
-            )
-        })?)
-        .context("Failed storing a file in the patch")?;
+    let mut index = 0;
+    for (iso_path, actual_path) in config.files.iter() {
+        add_entry_to_zip(&mut index, iso_path, actual_path, &mut zip, &mut new_map)?;
     }
     config.files = new_map;
 
@@ -274,10 +308,48 @@ fn build_patch<P: KeyValPrint>(
     Ok(())
 }
 
+fn add_file_to_iso<F: FileSource>(
+    iso_path: &String,
+    actual_path: &PathBuf,
+    iso: &mut Directory,
+    files: &mut F
+) -> Result<(), Error> {
+    iso.resolve_and_create_path(&iso_path).data = files
+        .read_to_vec(actual_path)
+        .with_context(|_| {
+            format!(
+                "Couldn't read the file \"{}\" to store it in the ISO.",
+                actual_path.display()
+            )
+        })?
+        .into();
+    Ok(())
+}
+
+fn add_entry_to_iso<F: FileSource>(
+    iso_path: &String,
+    actual_path: &PathBuf,
+    iso: &mut Directory,
+    files: &mut F
+) -> Result<(), Error> {
+    if actual_path.is_file() {
+        add_file_to_iso(iso_path, actual_path, iso, files)?;
+    } else if actual_path.is_dir() {
+        for entry in fs::read_dir(actual_path)? {
+            let entry = entry?;
+            let entry_path = entry.path();
+            let file_name = entry_path.file_name().expect("Entry has no name");
+            let iso_path = String::from(iso_path) + &String::from('/') + &String::from(file_name.to_str().unwrap());
+            add_entry_to_iso(&iso_path, &entry_path, iso, files)?;
+        }
+    }
+    Ok(())
+}
+
 pub fn build_iso<'a, P: KeyValPrint, F: FileSource>(
     printer: &P,
     mut files: F,
-    original_iso: &'a [u8],
+    original_iso: &'a iso::IsoBuf,
     compiled_library: Vec<u8>,
     config: &'a mut Config,
 ) -> Result<Directory<'a>, Error> {
@@ -286,15 +358,7 @@ pub fn build_iso<'a, P: KeyValPrint, F: FileSource>(
     printer.print(None, "Replacing", "files");
 
     for (iso_path, actual_path) in &config.files {
-        iso.resolve_and_create_path(iso_path).data = files
-            .read_to_vec(actual_path)
-            .with_context(|_| {
-                format!(
-                    "Couldn't read the file \"{}\" to store it in the ISO.",
-                    actual_path.display()
-                )
-            })?
-            .into();
+        add_entry_to_iso(iso_path, actual_path, &mut iso, &mut files)?;
     }
 
     let mut original_symbols = HashMap::new();
@@ -317,7 +381,7 @@ pub fn build_iso<'a, P: KeyValPrint, F: FileSource>(
     libs_to_link.push(compiled_library);
 
     for lib_path in config.link.libs.iter().flat_map(|x| x) {
-        let mut file_buf = files.read_to_vec(lib_path).with_context(|_| {
+        let file_buf = files.read_to_vec(lib_path).with_context(|_| {
             format!(
                 "Couldn't load \"{}\". Did you build the project correctly?",
                 lib_path.display()
@@ -383,7 +447,7 @@ pub fn build_iso<'a, P: KeyValPrint, F: FileSource>(
             .context("Couldn't patch the game")?
             .into();
     }
-    {
+    if iso.is_gamecube_iso() {
         printer.print(None, "Patching", "banner");
 
         if let Some(banner_file) = iso.banner_mut() {
@@ -440,14 +504,25 @@ pub fn build_and_emit_iso<P: KeyValPrint, F: FileSource>(
 
     printer.print(None, "Building", "ISO");
 
-    iso::writer::write_iso(
-        BufWriter::with_capacity(
-            4 << 20,
-            File::create(out_path).context("Couldn't create the final ISO")?,
-        ),
-        &iso,
-    )
-    .context("Couldn't write the final ISO")?;
+    match buf {
+        iso::IsoBuf::Raw(_) => {
+            iso::writer::write_iso(
+                BufWriter::with_capacity(
+                    4 << 20,
+                    File::create(out_path).context("Couldn't create the final ISO")?,
+                ),
+                &iso,
+            )
+            .context("Couldn't write the final ISO")?;
+        }
+        iso::IsoBuf::Extracted(_) => {
+            iso::writer::write_fs(
+                out_path,
+                &iso,
+            )
+            .context("Couldn't write the final ISO")?;
+        }
+    }
 
     Ok(())
 }

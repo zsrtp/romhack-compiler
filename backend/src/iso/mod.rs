@@ -1,6 +1,8 @@
 //! Based on http://www.gc-forever.com/yagcd/chap13.html#sec13
 //! and https://github.com/LordNed/WArchive-Tools
 
+use std::path::PathBuf;
+
 pub mod reader;
 pub mod virtual_file_system;
 pub mod writer;
@@ -40,4 +42,9 @@ struct FstEntry<'a> {
     file_offset_parent_dir: usize,
     file_size_next_dir_index: usize,
     file_name_offset: usize,
+}
+
+pub enum IsoBuf {
+    Raw(Vec<u8>),
+    Extracted(PathBuf)
 }

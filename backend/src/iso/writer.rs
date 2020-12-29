@@ -1,8 +1,10 @@
 use super::virtual_file_system::{Directory, Node};
 use super::{consts::*, FstEntry, FstNodeType};
 use byteorder::{WriteBytesExt, BE};
-use failure::{err_msg, Error};
+use failure::{err_msg, Error, ResultExt};
 use std::io::{Seek, SeekFrom, Write};
+use std::path::{PathBuf};
+use std::fs;
 
 pub fn write_iso<W>(mut writer: W, root: &Directory) -> Result<(), Error>
 where
@@ -114,6 +116,92 @@ where
     Ok(())
 }
 
+pub fn write_fs<'a>(path: PathBuf, root: &Directory<'a>) -> Result<(), Error> {
+    let path = path.clone();
+    fs::create_dir_all(&path)?;
+    let mut exculded_index: Vec<usize> = Vec::new();
+
+    let (root_index, root_dir, _) = write_data_dir(None, "&&rootdata", root, &path)?;
+    exculded_index.push(root_index);
+    if root.children.iter().map(|child| child.name()).collect::<Vec<&String>>().contains(&&String::from("&&rootdata")) {
+        for (_, node) in root_dir
+            .children
+            .iter()
+            .enumerate()
+        {
+            write_files_recursive(node, &path)?;
+        }
+    }
+
+    if root.children.iter().map(|child| child.name()).collect::<Vec<&String>>().contains(&&String::from("&&systemdata")) {
+        let (sys_index, sys_dir, sys_path) = write_data_dir(Some("sys"), "&&systemdata", root, &path)?;
+        exculded_index.push(sys_index);
+
+        write_data_file(&sys_path, "boot.bin", "iso.hdr", &sys_dir)?;
+        write_data_file(&sys_path, "apploader.img", "AppLoader.ldr", &sys_dir)?;
+        write_data_file(&sys_path, "main.dol", "Start.dol", &sys_dir)?;
+        write_data_file(&sys_path, "fst.bin", "Game.toc", &sys_dir)?;
+        write_data_file(&sys_path, "bi2.bin", "bi2.bin", &sys_dir)?;
+    }
+
+    if root.children.iter().map(|child| child.name()).collect::<Vec<&String>>().contains(&&String::from("&&discdata")) {
+        let (disc_index, disc_dir, disc_path) = write_data_dir(Some("disc"), "&&discdata", root, &path)?;
+        exculded_index.push(disc_index);
+
+        for (_, sub_node) in disc_dir
+            .children
+            .iter()
+            .enumerate()
+        {
+            write_files_recursive(sub_node, &disc_path)?;
+        }
+    }
+
+    let mut files_path = path.clone();
+    files_path.push("files");
+    fs::create_dir_all(&files_path)?;
+    for (_, node) in root
+        .children
+        .iter()
+        .enumerate()
+        .filter(|&(i, _)| !exculded_index.contains(&i))
+    {
+        write_files_recursive(node, &files_path)?;
+    }
+
+    Ok(())
+}
+
+fn write_data_dir<'a>(dir_fs_name: Option<&str>, dir_given_name: &str, parent_dir: &'a Directory<'a>, path: &PathBuf) -> Result<(usize, &'a Directory<'a>, PathBuf), Error> {
+    let (dir_index, dir) = parent_dir
+        .children
+        .iter()
+        .enumerate()
+        .filter_map(|(i, c)| c.as_directory().map(|d| (i, d)))
+        .find(|&(_, d)| d.name == dir_given_name)
+        .ok_or_else(|| err_msg(format!("The {} folder contains no {}", parent_dir.name, dir_given_name)))?;
+    let mut dir_path = path.clone();
+    if let Some(dir_fs_name) = dir_fs_name {
+        dir_path.push(dir_fs_name);
+        fs::create_dir_all(&dir_path)?;
+    }
+    Ok((dir_index, dir, dir_path))
+}
+
+fn write_data_file(dir_path: &PathBuf, fs_name: &str, given_name: &str, dir: &Directory) -> Result<(), Error> {
+    let file = dir
+        .children
+        .iter()
+        .filter_map(|c| c.as_file())
+        .find(|f| f.name == given_name)
+        .ok_or_else(|| err_msg(format!("The {} folder contains no {}", dir.name, given_name)))?;
+    let mut file_path = dir_path.clone();
+    file_path.push(fs_name);
+    fs::File::create(&file_path).context(format!("Couldn't open file \"{:?}\"", file_path.to_str()))?
+        .write(&file.data).context(format!("Couldn't write to file \"{:?}\"", file_path.to_str()))?;
+    Ok(())
+}
+
 fn calculate_fst_len(mut cur_value: usize, node: &Node) -> usize {
     match *node {
         Node::Directory(ref dir) => {
@@ -198,5 +286,35 @@ where
         }
     }
 
+    Ok(())
+}
+
+fn write_files_recursive(
+    node: &Node,
+    parent_path: &PathBuf
+) -> Result<(), Error>
+{
+    match *node {
+        Node::Directory(ref dir) => {
+            let mut dir_path = parent_path.clone();
+            dir_path.push(&dir.name);
+            if !dir_path.exists() {
+                fs::create_dir_all(&dir_path).context(format!("Couldn't create directory \"{:?}\"", dir_path.to_str()))?;
+            }
+            for (_, sub_node) in dir
+                .children
+                .iter()
+                .enumerate()
+            {
+                write_files_recursive(sub_node, &dir_path)?;
+            }
+        }
+        Node::File(ref file) => {
+            let mut file_path = parent_path.clone();
+            file_path.push(&file.name);
+            fs::File::create(&file_path).context(format!("Couldn't open file \"{:?}\"", file_path.to_str()))?
+                .write(&file.data).context(format!("Couldn't write to file \"{:?}\"", file_path.to_str()))?;
+        }
+    }
     Ok(())
 }

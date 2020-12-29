@@ -128,7 +128,7 @@ fn parse_type(text: &str) -> Result<(Option<Type>, &str), Cow<'static, str>> {
         Some('d') => Type::Normal(false, "f64"),
         Some('b') => Type::Normal(false, "bool"),
         Some('e') => Type::VarArgs,
-        Some('0'...'9') => {
+        Some('0'..='9') => {
             let (count, remaining) = parse_count(original_text)?;
             text = remaining;
 

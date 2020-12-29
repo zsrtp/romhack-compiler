@@ -24,7 +24,7 @@ pub fn create(
     writeln!(file, ".text section layout")?;
 
     for section in sections {
-        let mut section_name_buf;
+        let section_name_buf;
         let section_name = section.section_name;
         let section_name = if section_name.starts_with(".text.")
             && section.kind == SectionKind::TextSection
