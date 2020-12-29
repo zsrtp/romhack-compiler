@@ -14,8 +14,6 @@ jobs:
     - name: WASM Pack Build
       run: curl https://rustwasm.github.io/wasm-pack/installer/init.sh -sSf | sh && cd wasm && wasm-pack build && mv pkg/romhack_bg.wasm static/romhack_bg.wasm
     - uses: jakejarvis/s3-sync-action@master
-      
-    - name: S3 Sync
       with:
         args: --acl public-read --follow-symlinks
       env:
