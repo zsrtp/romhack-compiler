@@ -10,10 +10,10 @@ jobs:
     runs-on: ubuntu-latest
 
     steps:
-      - uses: actions/checkout@v1
-      - uses: icepuma/rust-action@master
+      - uses: jetli/wasm-pack-action@v0.3.0
+        name: WASM Build
         with:
-          args: cargo install wasm-pack && cd wasm && wasm-pack build
+          args: cd wasm && wasm-pack build
       - uses: shallwefootball/s3-upload-action@master
         name: Upload S3
         id: S3
