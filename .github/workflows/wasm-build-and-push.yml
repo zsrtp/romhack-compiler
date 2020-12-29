@@ -10,10 +10,9 @@ jobs:
     runs-on: ubuntu-latest
 
     steps:
-      - uses: jetli/wasm-pack-action@v0.3.0
-        name: WASM Build
-        with:
-          args: cd wasm && wasm-pack build
+      - uses: actions/checkout@v2
+        name: Install
+        run: curl https://rustwasm.github.io/wasm-pack/installer/init.sh -sSf | sh && cd wasm && wasm-pack build
       - uses: shallwefootball/s3-upload-action@master
         name: Upload S3
         id: S3
