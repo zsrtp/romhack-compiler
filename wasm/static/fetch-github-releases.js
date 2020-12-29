@@ -2,7 +2,7 @@ var releases = new Map();
 
 window.onload = function () {
   
-  const url = "https://api.github.com/repos/hallcristobal/tpgz/releases";
+  const url = "https://api.github.com/repos/zsrtp/tpgz/releases";
 
   fetch(url)
     .then((resp) => resp.json())
