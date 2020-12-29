@@ -11,8 +11,9 @@ jobs:
 
     steps:
       - uses: actions/checkout@v2
+
       - name: Install
-      - run: curl https://rustwasm.github.io/wasm-pack/installer/init.sh -sSf | sh && cd wasm && wasm-pack build
+        run: curl https://rustwasm.github.io/wasm-pack/installer/init.sh -sSf | sh && cd wasm && wasm-pack build
       - uses: shallwefootball/s3-upload-action@master
         name: Upload S3
         id: S3
