@@ -27,7 +27,7 @@ struct JSPrinter;
 
 impl KeyValPrint for JSPrinter {
     fn print(&self, kind: Option<MessageKind>, key: &str, val: &str) {
-        unsafe {
+        {
             let kind = match kind {
                 Some(MessageKind::Error) => 2,
                 Some(MessageKind::Warning) => 1,
@@ -42,7 +42,7 @@ struct RomHackWriter;
 
 impl io::Write for RomHackWriter {
     fn write(&mut self, buf: &[u8]) -> io::Result<usize> {
-        unsafe {
+        {
             write(buf.as_ptr(), buf.len());
             Ok(buf.len())
         }
@@ -54,7 +54,7 @@ impl io::Write for RomHackWriter {
 
 impl io::Seek for RomHackWriter {
     fn seek(&mut self, pos: SeekFrom) -> io::Result<u64> {
-        let new_pos = unsafe {
+        let new_pos = {
             match pos {
                 SeekFrom::Start(offset) => seek(0, offset as isize),
                 SeekFrom::End(offset) => seek(1, offset as isize),
@@ -69,7 +69,7 @@ struct RomHackCounter;
 
 impl io::Write for RomHackCounter {
     fn write(&mut self, buf: &[u8]) -> io::Result<usize> {
-        unsafe {
+        {
             count_write(buf.len());
             Ok(buf.len())
         }
@@ -81,7 +81,7 @@ impl io::Write for RomHackCounter {
 
 impl io::Seek for RomHackCounter {
     fn seek(&mut self, pos: SeekFrom) -> io::Result<u64> {
-        let new_pos = unsafe {
+        let new_pos = {
             match pos {
                 SeekFrom::Start(offset) => count_seek(0, offset as isize),
                 SeekFrom::End(offset) => count_seek(1, offset as isize),
@@ -120,7 +120,8 @@ pub extern "C" fn create_romhack(
     unsafe {
         let patch = from_raw_parts(patch_ptr, patch_len);
         let iso = from_raw_parts(iso_ptr, iso_len);
-        if let Err(e) = try_create_romhack(patch, iso) {
+        let mut buf = Vec::from(iso);
+        if let Err(e) = try_create_romhack(patch, &mut buf[..]) {
             let mut buf = Vec::new();
             for cause in e.iter_chain() {
                 buf.clear();
@@ -134,19 +135,17 @@ pub extern "C" fn create_romhack(
     }
 }
 
-fn try_create_romhack(patch: &[u8], iso: &[u8]) -> Result<(), Error> {
+fn try_create_romhack(patch: &[u8], iso: &mut [u8]) -> Result<(), Error> {
     let (zip, compiled_library, mut config) = open_config_from_patch(Cursor::new(patch))?;
     if let Some(name) = &config.info.game_name {
-        unsafe {
-            set_name(name.as_ptr(), name.len());
-        }
+        set_name(name.as_ptr(), name.len());
     }
     let romhack = build_iso(&JSPrinter, zip, iso, compiled_library, &mut config)?;
     JSPrinter.print(None, "Measuring", "Rom Hack File Size");
     write_iso(RomHackCounter, &romhack)?;
-    unsafe {
-        restart();
-    }
+
+    restart();
+
     JSPrinter.print(None, "Writing", "Rom Hack");
     let writer = BufWriter::new(RomHackWriter);
     write_iso(writer, &romhack)

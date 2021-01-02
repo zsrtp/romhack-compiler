@@ -17,7 +17,7 @@ fn main() {
     if let Err(e) = try_main() {
         eprintln!();
 
-        let mut bufwtr = BufferWriter::stderr(ColorChoice::Always);
+        let bufwtr = BufferWriter::stderr(ColorChoice::Always);
         let mut buffer = bufwtr.buffer();
         let mut color = ColorSpec::new();
         color.set_fg(Some(Color::Red)).set_bold(true);

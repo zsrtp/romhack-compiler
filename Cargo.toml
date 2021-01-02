@@ -4,7 +4,7 @@ version = "0.1.2"
 authors = ["Christopher Serr <cryze92@gmail.com>"]
 
 [workspace]
-members = ["backend", "wasm", "ui"]
+members = ["backend", "wii-crypto", "wasm", "ui"]
 
 [dependencies]
 romhack-backend = { path = "backend" }

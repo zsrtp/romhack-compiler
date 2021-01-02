@@ -17,6 +17,7 @@ pub mod consts {
     pub const OFFSET_DOL_OFFSET: usize = 0x420;
     pub const OFFSET_FST_OFFSET: usize = 0x424;
     pub const OFFSET_FST_SIZE: usize = 0x428;
+    pub const OFFSET_GC_MAGIC: usize = 0x01C;
     pub const HEADER_LENGTH: usize = 0x2440;
     pub const DOL_ALIGNMENT: usize = 1024;
     pub const FST_ALIGNMENT: usize = 256;

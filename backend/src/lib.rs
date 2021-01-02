@@ -12,6 +12,7 @@ extern crate serde;
 extern crate standalone_syn as syn;
 extern crate toml;
 extern crate zip;
+extern crate wii_crypto;
 
 mod assembler;
 mod banner;
@@ -24,6 +25,7 @@ pub mod iso;
 mod key_val_print;
 mod linker;
 
+use wii_crypto::wii_disc::Partition;
 use assembler::Assembler;
 use assembler::Instruction;
 use banner::Banner;
@@ -41,6 +43,7 @@ use std::mem;
 use std::path::PathBuf;
 use std::process::Command;
 use zip::{write::FileOptions, ZipArchive, ZipWriter};
+use wii_crypto::wii_disc::parse_disc;
 
 pub fn build<P: KeyValPrint>(printer: &P, debug: bool, patch: bool) -> Result<(), Error> {
     let mut toml_buf = String::new();
@@ -174,6 +177,50 @@ pub fn open_config_from_patch<R: Read + Seek>(
     Ok((zip, buffer, config))
 }
 
+fn add_file_to_zip(
+    index: usize,
+    iso_path: &String,
+    actual_path: &PathBuf,
+    zip: &mut ZipWriter<BufWriter<File>>,
+    new_map: &mut HashMap<String, PathBuf>
+) -> Result<(), Error> {
+    let zip_path = format!("replace{}.dat", index);
+    new_map.insert(iso_path.clone(), PathBuf::from(&zip_path));
+    zip.start_file(zip_path, FileOptions::default())
+        .context("Failed creating a new patch file entry")?;
+
+    zip.write_all(&fs::read(actual_path).with_context(|_| {
+        format!(
+            "Couldn't read the file \"{}\" to store it in the patch.",
+            actual_path.display()
+        )
+    })?)
+    .context("Failed storing a file in the patch")?;
+    Ok(())
+}
+
+fn add_entry_to_zip(
+    index: &mut usize,
+    iso_path: &String,
+    actual_path: &PathBuf,
+    zip: &mut ZipWriter<BufWriter<File>>,
+    new_map: &mut HashMap<String, PathBuf>
+) -> Result<(), Error> {
+    if actual_path.is_file() {
+        *index = *index + 1;
+        add_file_to_zip(*index, iso_path, actual_path, zip, new_map)?;
+    } else if actual_path.is_dir() {
+        for entry in fs::read_dir(actual_path)? {
+            let entry = entry?;
+            let entry_path = entry.path();
+            let file_name = entry_path.file_name().expect("Entry has no name");
+            let iso_path = String::from(iso_path) + &String::from('/') + &String::from(file_name.to_str().unwrap());
+            add_entry_to_zip(index, &iso_path, &entry_path, zip, new_map)?;
+        }
+    }
+    Ok(())
+}
+
 fn build_patch<P: KeyValPrint>(
     printer: &P,
     compiled_library: Vec<u8>,
@@ -189,19 +236,9 @@ fn build_patch<P: KeyValPrint>(
     printer.print(None, "Storing", "replacement files");
 
     let mut new_map = HashMap::new();
-    for (index, (iso_path, actual_path)) in config.files.iter().enumerate() {
-        let zip_path = format!("replace{}.dat", index);
-        new_map.insert(iso_path.clone(), PathBuf::from(&zip_path));
-        zip.start_file(zip_path, FileOptions::default())
-            .context("Failed creating a new patch file entry")?;
-
-        zip.write_all(&fs::read(actual_path).with_context(|_| {
-            format!(
-                "Couldn't read the file \"{}\" to store it in the patch.",
-                actual_path.display()
-            )
-        })?)
-        .context("Failed storing a file in the patch")?;
+    let mut index = 0;
+    for (iso_path, actual_path) in config.files.iter() {
+        add_entry_to_zip(&mut index, iso_path, actual_path, &mut zip, &mut new_map)?;
     }
     config.files = new_map;
 
@@ -274,27 +311,47 @@ fn build_patch<P: KeyValPrint>(
     Ok(())
 }
 
+fn add_file_to_iso<F: FileSource>(
+    iso_path: &String,
+    actual_path: &PathBuf,
+    iso: &mut Directory,
+    files: &mut F
+) -> Result<(), Error> {
+    iso.resolve_and_create_path(&iso_path).data = files
+        .read_to_vec(actual_path)
+        .with_context(|_| {
+            format!(
+                "Couldn't read the file \"{}\" to store it in the ISO.",
+                actual_path.display()
+            )
+        })?
+        .into();
+    Ok(())
+}
+
 pub fn build_iso<'a, P: KeyValPrint, F: FileSource>(
     printer: &P,
     mut files: F,
-    original_iso: &'a [u8],
+    original_iso: &'a mut [u8],
     compiled_library: Vec<u8>,
     config: &'a mut Config,
 ) -> Result<Directory<'a>, Error> {
-    let mut iso = iso::reader::load_iso(original_iso).context("Couldn't parse the ISO")?;
+    let mut part_opt: Option<Partition> = None;
+    match parse_disc(&original_iso[..]) {
+        Ok((wii_buf, part_opt_parsed)) => {
+            part_opt = part_opt_parsed.clone();
+            if let Some(part) = part_opt_parsed {
+                original_iso[part.part_offset..part.part_offset + wii_buf.len()].copy_from_slice(&wii_buf);
+            }
+        },
+        Err(_) => (),
+    }
+    let mut iso = iso::reader::load_iso(&original_iso[..], &part_opt).context("Couldn't parse the ISO")?;
 
     printer.print(None, "Replacing", "files");
 
     for (iso_path, actual_path) in &config.files {
-        iso.resolve_and_create_path(iso_path).data = files
-            .read_to_vec(actual_path)
-            .with_context(|_| {
-                format!(
-                    "Couldn't read the file \"{}\" to store it in the ISO.",
-                    actual_path.display()
-                )
-            })?
-            .into();
+        add_file_to_iso(iso_path, actual_path, &mut iso, &mut files)?;
     }
 
     let mut original_symbols = HashMap::new();
@@ -317,7 +374,7 @@ pub fn build_iso<'a, P: KeyValPrint, F: FileSource>(
     libs_to_link.push(compiled_library);
 
     for lib_path in config.link.libs.iter().flat_map(|x| x) {
-        let mut file_buf = files.read_to_vec(lib_path).with_context(|_| {
+        let file_buf = files.read_to_vec(lib_path).with_context(|_| {
             format!(
                 "Couldn't load \"{}\". Did you build the project correctly?",
                 lib_path.display()
@@ -383,7 +440,7 @@ pub fn build_iso<'a, P: KeyValPrint, F: FileSource>(
             .context("Couldn't patch the game")?
             .into();
     }
-    {
+    if iso.is_gamecube_iso() {
         printer.print(None, "Patching", "banner");
 
         if let Some(banner_file) = iso.banner_mut() {
@@ -431,12 +488,11 @@ pub fn build_and_emit_iso<P: KeyValPrint, F: FileSource>(
 ) -> Result<(), Error> {
     printer.print(None, "Loading", "original game");
 
-    let buf = iso::reader::load_iso_buf(&config.src.iso)
+    let mut buf = iso::reader::load_iso_buf(&config.src.iso)
         .with_context(|_| format!("Couldn't find \"{}\".", config.src.iso.display()))?;
-
     let out_path = mem::replace(&mut config.build.iso, Default::default());
 
-    let iso = build_iso(printer, files, &buf, compiled_library, &mut config)?;
+    let iso = build_iso(printer, files, &mut buf[..], compiled_library, &mut config)?;
 
     printer.print(None, "Building", "ISO");
 
