@@ -1,7 +1,8 @@
 extern crate byteorder;
 #[macro_use]
 extern crate lazy_static;
-extern crate libaes;
+extern crate block_modes;
+extern crate aes;
 // extern crate pbr;
 extern crate rayon;
 

@@ -25,7 +25,6 @@ pub mod iso;
 mod key_val_print;
 mod linker;
 
-use wii_crypto::wii_disc::Partition;
 use assembler::Assembler;
 use assembler::Instruction;
 use banner::Banner;
@@ -34,6 +33,7 @@ use dol::DolFile;
 use failure::{err_msg, Error, ResultExt};
 use file_source::{FileSource, FileSystem};
 use iso::virtual_file_system::Directory;
+use iso::consts::*;
 pub use key_val_print::{DontPrint, KeyValPrint, MessageKind};
 use std::collections::HashMap;
 use std::fs::{self, File, OpenOptions};
@@ -44,6 +44,8 @@ use std::path::PathBuf;
 use std::process::Command;
 use zip::{write::FileOptions, ZipArchive, ZipWriter};
 use wii_crypto::wii_disc::parse_disc;
+use wii_crypto::wii_disc::Partition;
+use byteorder::{ByteOrder, BE};
 
 pub fn build<P: KeyValPrint>(printer: &P, debug: bool, patch: bool) -> Result<(), Error> {
     let mut toml_buf = String::new();
@@ -329,6 +331,10 @@ fn add_file_to_iso<F: FileSource>(
     Ok(())
 }
 
+fn is_wii(buf: &[u8]) -> bool {
+    BE::read_u32(&buf[OFFSET_WII_MAGIC..]) == 0x5D1C9EA3
+}
+
 pub fn build_iso<'a, P: KeyValPrint, F: FileSource>(
     printer: &P,
     mut files: F,
@@ -337,14 +343,14 @@ pub fn build_iso<'a, P: KeyValPrint, F: FileSource>(
     config: &'a mut Config,
 ) -> Result<Directory<'a>, Error> {
     let mut part_opt: Option<Partition> = None;
-    match parse_disc(&original_iso[..]) {
-        Ok((wii_buf, part_opt_parsed)) => {
-            part_opt = part_opt_parsed.clone();
-            if let Some(part) = part_opt_parsed {
-                original_iso[part.part_offset..part.part_offset + wii_buf.len()].copy_from_slice(&wii_buf);
-            }
-        },
-        Err(_) => (),
+    if is_wii(original_iso) {
+        printer.print(None, "Decrypting", "partitions");
+        match parse_disc(&mut original_iso[..]) {
+            Ok(part_opt_parsed) => {
+                part_opt = part_opt_parsed.clone();
+            },
+            Err(_) => (),
+        }
     }
     let mut iso = iso::reader::load_iso(&original_iso[..], &part_opt).context("Couldn't parse the ISO")?;
 

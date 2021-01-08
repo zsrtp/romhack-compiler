@@ -17,27 +17,23 @@ pub fn load_iso_buf<P: AsRef<Path>>(path: P) -> IOResult<Vec<u8>> {
 }
 
 pub fn load_iso<'a>(buf: &'a [u8], part_opt: &Option<Partition>) -> Result<Directory<'a>, Error> {
-    let partition_offset = if let Some(part) = part_opt {part.part_offset} else {0 as usize};
-    // println!("buffer len: {:#010x}", buf.len());
-    let is_gc: bool = is_gc(buf);
-    let fst_offset = (BE::read_u32(&buf[partition_offset + OFFSET_FST_OFFSET..]) << (if is_gc {0} else {2})) as usize;
-    let mut pos = fst_offset;
+    let partition_offset = if let Some(part) = part_opt {part.part_offset + part.header.data_offset} else {0 as usize};
+    let is_wii: bool = is_wii(buf);
+    let fst_offset = (BE::read_u32(&buf[partition_offset + OFFSET_FST_OFFSET..]) as usize) << (if is_wii {2} else {0});
     let num_entries = BE::read_u32(&buf[partition_offset + fst_offset + 8..]) as usize;
     let string_table_offset = num_entries * 0xC;
 
     let mut fst_entries = Vec::with_capacity(num_entries);
-    for _ in 0..num_entries {
-        let kind = if buf[partition_offset + pos] == 0 {
+    for i in 0..num_entries {
+        let kind = if buf[partition_offset + fst_offset + i*12] == 0 {
             FstNodeType::File
         } else {
             FstNodeType::Directory
         };
-        pos += 2;
 
-        let cur_pos = pos;
-        let string_offset = BE::read_u16(&buf[partition_offset + pos..]) as usize;
+        let string_offset = (BE::read_u32(&buf[partition_offset + fst_offset + i*12..]) & 0x00ffffff) as usize;
 
-        pos = string_offset + string_table_offset + fst_offset;
+        let pos = string_offset + string_table_offset + fst_offset;
         let mut end = pos;
         while buf[partition_offset + end] != 0 {
             end += 1;
@@ -45,13 +41,8 @@ pub fn load_iso<'a>(buf: &'a [u8], part_opt: &Option<Partition>) -> Result<Direc
         let relative_file_name =
             str::from_utf8(&buf[partition_offset + pos..partition_offset + end]).context("Couldn't parse the relative file name")?;
 
-        pos = cur_pos + 2;
-        let file_offset_parent_dir = BE::read_u32(&buf[partition_offset + pos..]) as usize;
-        let file_size_next_dir_index = BE::read_u32(&buf[partition_offset + pos + 4..]) as usize;
-        if kind == FstNodeType::File {
-            println!("({}) addr: {:#010x} [size: {:#010x}]", relative_file_name, (file_offset_parent_dir << 2), file_size_next_dir_index); // + 0x400 * ((file_offset_parent_dir << 2) / 0x7C00 + 1)
-        }
-        pos += 8;
+        let file_offset_parent_dir = (BE::read_u32(&buf[partition_offset + fst_offset + i*12 + 4..]) as usize) << (if is_wii {2} else {0});
+        let file_size_next_dir_index = BE::read_u32(&buf[partition_offset + fst_offset + i*12 + 8..]) as usize;
 
         fst_entries.push(FstEntry {
             kind,
@@ -69,7 +60,7 @@ pub fn load_iso<'a>(buf: &'a [u8], part_opt: &Option<Partition>) -> Result<Direc
         .children
         .push(Node::File(File::new("iso.hdr", &buf[partition_offset..partition_offset + HEADER_LENGTH])));
 
-    let dol_offset = (BE::read_u32(&buf[partition_offset + OFFSET_DOL_OFFSET..]) << (if is_gc {0} else {2})) as usize;
+    let dol_offset = (BE::read_u32(&buf[partition_offset + OFFSET_DOL_OFFSET..]) as usize) << (if is_wii {2} else {0});
 
     sys_data.children.push(Node::File(File::new(
         "AppLoader.ldr",
@@ -138,14 +129,53 @@ fn get_dir_structure_recursive<'a>(
 
 fn get_file_data<'a>(fst_data: &FstEntry<'a>, buf: &'a [u8], part_opt: &Option<Partition>) -> File<'a> {
     let part_data_offset = if let Some(part) = part_opt {part.part_offset + part.header.data_offset} else {0};
-    let file_offset = fst_data.file_offset_parent_dir << (if is_gc(buf) {0} else {2});
-    let data = &buf[part_data_offset + file_offset..][..fst_data.file_size_next_dir_index]; //  + 0x400 * ((file_offset) / 0x7C00 + 1)
-    if fst_data.relative_file_name == "RframeworkF.map" {
-        println!("data len: {:#x}; {:#010x}; first bytes: \"{}\"", data.len(), (part_data_offset + file_offset) as usize, String::from_utf8_lossy(&data[..32]));
-    }
+    let data = &buf[part_data_offset + fst_data.file_offset_parent_dir..][..fst_data.file_size_next_dir_index];
     File::new(fst_data.relative_file_name, data)
 }
 
-fn is_gc(buf: &[u8]) -> bool {
-    BE::read_u32(&buf[OFFSET_GC_MAGIC..]) == 0xC2339F3D
+fn is_wii(buf: &[u8]) -> bool {
+    BE::read_u32(&buf[OFFSET_WII_MAGIC..]) == 0x5D1C9EA3
 }
+
+// fn read_partition(in_buf: &[u8], out_buf: &mut [u8], offset: usize, size: usize, part_opt: &Option<Partition>) {
+//     let mut block = [0u8; 0x7c00];
+//     if let Some(part) = part_opt {
+//         let mut offset = offset;
+//         let mut len = size;
+//         let mut out_offset = 0usize;
+//         while len > 0 {
+//             let offset_in_block = offset % 0x7c00;
+//             let mut len_in_block = 0x7c00 - offset_in_block;
+//             if len_in_block > len {
+//                 len_in_block = len;
+//             }
+//             let block_no = offset / 0x7c00;
+//             block.copy_from_slice(&in_buf[part.part_offset + 0x8000 * block_no + 0x400..][..0x7c00]);
+//             out_buf[out_offset..][..len_in_block].copy_from_slice(&block[offset_in_block..][..len_in_block]);
+//             out_offset += len_in_block;
+//             offset += len_in_block;
+//             len -= len_in_block;
+//         }
+//     } else {
+//         out_buf.copy_from_slice(&in_buf[offset..][..size]);
+//     }
+// }
+
+// fn read(buf: &[u8], offset: usize, size: usize, part_opt: &Option<Partition>) -> Vec<u8> {
+//     let mut out: Vec<u8> = Vec::new();
+//     out.resize(size, 0);
+//     read_partition(buf, &mut out[..], offset, size, part_opt);
+//     out
+// }
+
+// fn read_u16(buf: &[u8], offset: usize, part_opt: &Option<Partition>) -> u16 {
+//     let mut block = [0u8; 0x2];
+//     read_partition(buf, &mut block, offset, 4, part_opt);
+//     BE::read_u16(&block[..])
+// }
+
+// fn read_u32(buf: &[u8], offset: usize, part_opt: &Option<Partition>) -> u32 {
+//     let mut block = [0u8; 0x4];
+//     read_partition(buf, &mut block, offset, 4, part_opt);
+//     BE::read_u32(&block[..])
+// }
