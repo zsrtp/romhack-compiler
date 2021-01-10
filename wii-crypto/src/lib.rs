@@ -3,8 +3,8 @@ extern crate byteorder;
 extern crate lazy_static;
 extern crate block_modes;
 extern crate aes;
-// extern crate pbr;
 extern crate rayon;
+extern crate failure;
 
 pub mod wii_disc;
 

@@ -6,7 +6,7 @@ use std::fs;
 use std::io::{Read, Result as IOResult};
 use std::path::Path;
 use std::str;
-use wii_crypto::wii_disc::{Partition};
+use wii_crypto::wii_disc::{Partition, Partitions};
 
 pub fn load_iso_buf<P: AsRef<Path>>(path: P) -> IOResult<Vec<u8>> {
     let mut file = fs::File::open(path)?;
@@ -16,7 +16,8 @@ pub fn load_iso_buf<P: AsRef<Path>>(path: P) -> IOResult<Vec<u8>> {
     Ok(buf)
 }
 
-pub fn load_iso<'a>(buf: &'a [u8], part_opt: &Option<Partition>) -> Result<Directory<'a>, Error> {
+pub fn load_iso<'a>(buf: &'a [u8], parts_opt: &Option<Partitions>) -> Result<Directory<'a>, Error> {
+    let part_opt = parts_opt.clone().and_then(|p| Some(p.partitions[p.data_idx]));
     let partition_offset = if let Some(part) = part_opt {part.part_offset + part.header.data_offset} else {0 as usize};
     let is_wii: bool = is_wii(buf);
     let fst_offset = (BE::read_u32(&buf[partition_offset + OFFSET_FST_OFFSET..]) as usize) << (if is_wii {2} else {0});
@@ -56,11 +57,19 @@ pub fn load_iso<'a>(buf: &'a [u8], part_opt: &Option<Partition>) -> Result<Direc
     let mut root_dir = Directory::new("root");
     let mut sys_data = Directory::new("&&systemdata");
 
+    if let Some(parts) = parts_opt {
+        sys_data.children.push(Node::File(File::new("w_iso.hdr", &buf[..0x50000])));
+        for (i, part) in parts.partitions.iter().enumerate() {
+            sys_data.children.push(Node::File(File::new(format!("w_part{}.prt", i).as_str(), &buf[part.part_offset ..][.. part.header.data_offset + part.header.data_size])));
+        }
+    }
+
     sys_data
         .children
         .push(Node::File(File::new("iso.hdr", &buf[partition_offset..partition_offset + HEADER_LENGTH])));
 
     let dol_offset = (BE::read_u32(&buf[partition_offset + OFFSET_DOL_OFFSET..]) as usize) << (if is_wii {2} else {0});
+    println!("dol offset: {}", dol_offset);
 
     sys_data.children.push(Node::File(File::new(
         "AppLoader.ldr",

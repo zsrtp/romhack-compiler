@@ -7,6 +7,7 @@ use std::mem;
 use std::convert::TryFrom;
 use byteorder::{BE, ByteOrder};
 use rayon::prelude::*;
+use failure::Fail;
 // use std::fs::File;
 // use std::io::prelude::*;
 
@@ -17,17 +18,31 @@ trait Unpackable {
     const BLOCK_SIZE: usize;
 }
 
-pub type Error = String;
+#[derive(Debug, Fail)]
+pub enum WiiCryptoError {
+    #[fail(display = "Invalid Wii disc: magic is {:#010X}", magic)]
+    NotWiiDisc {
+        magic: u32,
+    },
+    #[fail(display = "Could not decrypt block")]
+    AesDecryptError,
+    #[fail(display = "Could not encrypt block")]
+    AesEncryptError,
+    #[fail(display = "The provided slice is too small to be converted into a {}.", name)]
+    ConvertError {
+        name: String,
+    },
+}
 
 #[macro_export]
 macro_rules! declare_tryfrom {
     ( $T:ty ) => {
         impl TryFrom<&[u8]> for $T {
-            type Error = Error;
+            type Error = WiiCryptoError;
 
             fn try_from(slice: &[u8]) -> Result<$T, Self::Error> {
                 if slice.len() < <$T>::BLOCK_SIZE {
-                    Err(format!("The provided slice is too small to be converted into a {}.", stringify![$T]))
+                    Err(WiiCryptoError::ConvertError{name: stringify![$T].to_string()})
                 } else {
                     let mut buf = [0 as u8; <$T>::BLOCK_SIZE];
                     buf.clone_from_slice(&slice[..<$T>::BLOCK_SIZE]);
@@ -60,7 +75,7 @@ impl Unpackable for DiscHeader {
     const BLOCK_SIZE: usize = 0x62;
 }
 
-fn disc_get_header(raw: &[u8]) -> DiscHeader {
+pub fn disc_get_header(raw: &[u8]) -> DiscHeader {
     let mut unk1 = [0 as u8; 14];
     let mut game_title = [0 as char; 64];
     unsafe {
@@ -85,7 +100,7 @@ fn disc_get_header(raw: &[u8]) -> DiscHeader {
     }
 }
 
-fn disc_set_header(buffer: &mut [u8], dh: &DiscHeader) {
+pub fn disc_set_header(buffer: &mut [u8], dh: &DiscHeader) {
     unsafe {
         buffer[0x00] = dh.disc_id as u8;
         buffer[0x01] = dh.game_code[0] as u8;
@@ -118,7 +133,7 @@ pub struct PartInfo {
     pub entries: Vec<PartInfoEntry>,
 }
 
-fn disc_get_part_info(buf: &[u8]) -> PartInfo {
+pub fn disc_get_part_info(buf: &[u8]) -> PartInfo {
     let mut entries: Vec<PartInfoEntry> = Vec::new();
     let n_part = BE::read_u32(&buf[0x40000..]) as usize;
     let part_info_offset = (BE::read_u32(&buf[0x40004..]) as usize) << 2;
@@ -134,7 +149,7 @@ fn disc_get_part_info(buf: &[u8]) -> PartInfo {
     }
 }
 
-fn disc_set_part_info(buffer: &mut [u8], pi: &PartInfo) {
+pub fn disc_set_part_info(buffer: &mut [u8], pi: &PartInfo) {
     BE::write_u32(&mut buffer[0x40000..], pi.entries.len() as u32);
     BE::write_u32(&mut buffer[0x40004..], (pi.offset >> 2) as u32);
     for (i, entry) in pi.entries.iter().enumerate() {
@@ -301,7 +316,24 @@ pub struct Partition {
     pub header: PartHeader,
 }
 
-fn decrypt_title_key(tik: &Ticket) -> [u8; 0x10] {
+#[derive(Debug, Clone)]
+pub struct Partitions {
+    pub data_idx: usize,
+    pub part_info: PartInfo,
+    pub partitions: Vec<Partition>,
+}
+
+pub fn aes_decrypt_inplace<'a>(data: &'a mut[u8], iv: &[u8], key: &[u8]) -> Result<&'a [u8], WiiCryptoError> {
+    let cipher = Aes128Cbc::new_var(key, iv).unwrap();
+    cipher.decrypt(&mut *data).or(Err(WiiCryptoError::AesDecryptError))
+}
+
+pub fn aes_encrypt_inplace<'a>(data: &'a mut [u8], iv: &[u8], key: &[u8], size: usize) -> Result<&'a[u8], WiiCryptoError> {
+    let cipher = Aes128Cbc::new_var(key, iv).unwrap();
+    cipher.encrypt(&mut *data, size).or(Err(WiiCryptoError::AesEncryptError))
+}
+
+pub fn decrypt_title_key(tik: &Ticket) -> [u8; 0x10] {
     let mut buf = [0 as u8; 0x10];
     let key = &COMMON_KEY[tik.common_key_index as usize];
     let mut iv = [0 as u8; consts::WII_KEY_SIZE];
@@ -314,7 +346,7 @@ fn decrypt_title_key(tik: &Ticket) -> [u8; 0x10] {
     buf
 }
 
-fn decrypt_partition_inplace<'a>(buf: &'a mut [u8], part: Partition) -> Result<(), Error> {
+fn decrypt_partition_inplace<'a>(buf: &'a mut [u8], part: Partition) -> Result<(), WiiCryptoError> {
     let part_key = decrypt_title_key(&part.header.ticket);
     let sector_count = part.header.data_size / 0x8000;
     let mut data_pool: Vec<&mut[u8]> = Vec::with_capacity(sector_count);
@@ -327,23 +359,9 @@ fn decrypt_partition_inplace<'a>(buf: &'a mut [u8], part: Partition) -> Result<(
     data_pool.par_iter_mut().for_each(|data| {
         let mut iv = [0 as u8; consts::WII_KEY_SIZE];
         iv[..consts::WII_KEY_SIZE].copy_from_slice(&data[consts::WII_SECTOR_IV_OFF..][..consts::WII_KEY_SIZE]);
-        let cipher = Aes128Cbc::new_var(&part_key[..], &[0 as u8; consts::WII_KEY_SIZE]).unwrap();
-        cipher.decrypt(&mut (data)[..consts::WII_SECTOR_HASH_SIZE]).unwrap();
-        let cipher = Aes128Cbc::new_var(&part_key[..], &iv[..]).unwrap();
-        cipher.decrypt(&mut (data)[consts::WII_SECTOR_HASH_SIZE..][..consts::WII_SECTOR_DATA_SIZE]).unwrap();
+        aes_decrypt_inplace(&mut data[..consts::WII_SECTOR_HASH_SIZE], &[0 as u8; consts::WII_KEY_SIZE], &part_key).unwrap();
+        aes_decrypt_inplace(&mut data[consts::WII_SECTOR_HASH_SIZE..][..consts::WII_SECTOR_DATA_SIZE], &iv, &part_key).unwrap();
     });
-    // for i in 0 .. sector_count {
-    //     let sector_offset = part.part_offset + part.header.data_offset + i * consts::WII_SECTOR_SIZE;
-    //     let mut data = [0u8; consts::WII_SECTOR_SIZE];
-    //     data.copy_from_slice(&buf[sector_offset..][..consts::WII_SECTOR_SIZE]);
-
-    //     let mut iv = [0 as u8; consts::WII_KEY_SIZE];
-    //     let cipher = Aes128Cbc::new_var(&part_key[..], &iv[..]).unwrap();
-    //     cipher.decrypt(&mut buf[sector_offset..][..consts::WII_SECTOR_HASH_SIZE]).or(Err(format!("Could not decrypt hash sector {}.", i)))?;
-    //     iv[..consts::WII_KEY_SIZE].copy_from_slice(&data[consts::WII_SECTOR_IV_OFF..][..consts::WII_KEY_SIZE]);
-    //     let cipher = Aes128Cbc::new_var(&part_key[..], &iv[..]).unwrap();
-    //     cipher.decrypt(&mut buf[sector_offset + consts::WII_SECTOR_HASH_SIZE..][..consts::WII_SECTOR_DATA_SIZE]).or(Err(format!("Could not decrypt sector {}.", i)))?;
-    // }
     for i in 0..sector_count {
         let mut data = [0u8; consts::WII_SECTOR_DATA_SIZE];
         data.copy_from_slice(&buf[part.part_offset + part.header.data_offset + i * consts::WII_SECTOR_SIZE + consts::WII_SECTOR_HASH_SIZE..part.part_offset + part.header.data_offset + (i + 1) * consts::WII_SECTOR_SIZE]);
@@ -355,16 +373,18 @@ fn decrypt_partition_inplace<'a>(buf: &'a mut [u8], part: Partition) -> Result<(
     return Ok(());
 }
 
-pub fn parse_disc(buf: &mut [u8]) -> Result<Option<Partition>, Error> {
+pub fn parse_disc(buf: &mut [u8]) -> Result<Option<Partitions>, WiiCryptoError> {
     let header = disc_get_header(buf);
     if header.wii_magic != 0x5D1C9EA3 {
-        return Err(String::from(format!("Not a wii disc: magic code is {:#X}", header.wii_magic)))
+        return Err(WiiCryptoError::NotWiiDisc{magic: header.wii_magic})
     }
     // if header.disable_disc_encrypt == 1 || header.disable_hash_verif == 1 {
     //     return Ok(None);
     // } else {
     let part_info = disc_get_part_info(buf);
-    let mut ret: Option<Partition> = None;
+    let mut ret_vec: Vec<Partition> = Vec::new();
+    let mut ret: Option<Partitions> = None;
+    let mut data_idx: Option<usize> = None;
     for (i, entry) in part_info.entries.iter().enumerate() {
         let part = Partition {
             part_offset: entry.offset,
@@ -372,9 +392,19 @@ pub fn parse_disc(buf: &mut [u8]) -> Result<Option<Partition>, Error> {
             header: PartHeader::try_from(&buf[entry.offset..][..0x2C0])?,
         };
         println!("part{}: part type={}, part offset={:08X}; tmd size={}, tmd offset={:08X}; cert size={}, cert offset={:08X}; h3 offset={:08X}; data size={}, data offset={:08X}", i, part.part_type, part.part_offset, part.header.tmd_size, part.header.tmd_offset, part.header.cert_size, part.header.cert_offset, part.header.h3_offset, part.header.data_size, part.header.data_offset);
-        decrypt_partition_inplace(buf, part)?;
-        if part.part_type == 0 {
-            ret = Some(part);
+        if part.part_type == 0 && data_idx.is_none() {
+            data_idx = Some(i);
+            decrypt_partition_inplace(buf, part)?;
+        }
+        ret_vec.push(part);
+    }
+    if ret_vec.len() > 0 {
+        if let Some(data_idx) = data_idx {
+            ret = Some(Partitions{
+                data_idx,
+                part_info,
+                partitions: ret_vec,
+            });
         }
     }
     // if let Some(mut file) = File::create("test.bin").ok() {

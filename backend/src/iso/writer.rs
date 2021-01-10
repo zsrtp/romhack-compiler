@@ -1,15 +1,21 @@
-use super::virtual_file_system::{Directory, Node};
+use super::virtual_file_system::{Directory, Node, File};
 use super::{consts::*, FstEntry, FstNodeType};
 use byteorder::{WriteBytesExt, BE};
-use failure::{err_msg, Error, ResultExt};
-use std::io::{Seek, SeekFrom, Write};
-use std::path::{PathBuf};
-use std::fs;
+use failure::{err_msg, Error};
+use std::io::{Seek, SeekFrom, Write, Read};
+use wii_crypto::wii_disc::{PartHeader, decrypt_title_key, aes_encrypt_inplace};
+use std::convert::TryFrom;
+use sha1::Sha1;
 
-pub fn write_iso<W>(mut writer: W, root: &Directory) -> Result<(), Error>
+pub fn write_iso<W, R>(mut writer: W, mut reader: R, root: &Directory) -> Result<(), Error>
 where
     W: Write + Seek,
+    R: Read + Seek,
 {
+    let is_wii = root.is_wii_iso();
+    let mut part_offset = 0usize;
+    let mut part_data_offset = 0usize;
+    let mut part_header_opt: Option<PartHeader> = None;
     let (sys_index, sys_dir) = root
         .children
         .iter()
@@ -17,6 +23,35 @@ where
         .filter_map(|(i, c)| c.as_directory().map(|d| (i, d)))
         .find(|&(_, d)| d.name == "&&systemdata")
         .ok_or_else(|| err_msg("The virtual file system contains no &&systemdata folder"))?;
+
+    if is_wii {
+        // fill with 0s
+        print!("filling with 0s...");
+        std::io::stdout().flush().unwrap();
+        writer.seek(SeekFrom::Start(0))?;
+        for _ in 0usize..0x11824 {
+            writer.write_all(&[0; 0x10000])?;
+        }
+        writer.seek(SeekFrom::Start(0))?;
+        println!(" done");
+
+        let header = fetch_file(sys_dir, String::from("w_iso.hdr"))?;
+        writer.write_all(&header.data)?;
+        let part_info = wii_crypto::wii_disc::disc_get_part_info(&header.data[..]);
+        for (i, entry) in part_info.entries.iter().enumerate() {
+            let filename = format!("w_part{}.prt", i);
+            let partition = fetch_file(sys_dir, filename)?;
+            writer.seek(SeekFrom::Start(entry.offset as u64))?;
+            writer.write_all(&partition.data)?;
+            if entry.part_type == 0 && part_data_offset == 0 {
+                let part_header = PartHeader::try_from(&partition.data[..0x2C0]).expect("Invalid partition header.");
+                part_offset = entry.offset;
+                part_data_offset = entry.offset + part_header.data_offset;
+                part_header_opt = Some(part_header);
+            }
+        }
+        writer.seek(SeekFrom::Start(part_data_offset as u64))?;
+    }
 
     let header = sys_dir
         .children
@@ -34,7 +69,7 @@ where
         .ok_or_else(|| err_msg("The &&systemdata folder contains no AppLoader.ldr"))?;
     writer.write_all(&apploader.data)?;
 
-    let dol_offset_without_padding = header.data.len() + apploader.data.len();
+    let dol_offset_without_padding = part_data_offset + header.data.len() + apploader.data.len();
     let dol_offset =
         (dol_offset_without_padding + (DOL_ALIGNMENT - 1)) / DOL_ALIGNMENT * DOL_ALIGNMENT;
 
@@ -92,113 +127,132 @@ where
         do_output_prep(node, &mut output_fst, &mut fst_name_bank, &mut writer, 0)?;
     }
 
+    let mut data_end = writer.seek(SeekFrom::Current(0))? as usize;
+    let size_mod = (data_end - part_data_offset) % 0x1f0000;
+    data_end = data_end + if size_mod != 0 {0x1f0000 - size_mod} else {0};
+
     // Add actual root FST entry
     output_fst[0].file_size_next_dir_index = output_fst.len();
 
-    writer.seek(SeekFrom::Start(fst_list_offset as u64))?;
+    writer.seek(SeekFrom::Start((part_data_offset + fst_list_offset) as u64))?;
 
     for entry in &output_fst {
         writer.write_u8(entry.kind as u8)?;
         writer.write_u8(0)?;
         writer.write_u16::<BE>(entry.file_name_offset as u16)?;
-        writer.write_i32::<BE>(entry.file_offset_parent_dir as i32)?;
+        writer.write_i32::<BE>((entry.file_offset_parent_dir >> if is_wii {2} else {0}) as i32)?;
         writer.write_i32::<BE>(entry.file_size_next_dir_index as i32)?;
     }
 
     writer.write_all(&fst_name_bank)?;
 
-    writer.seek(SeekFrom::Start(OFFSET_DOL_OFFSET as u64))?;
-    writer.write_u32::<BE>(dol_offset as u32)?;
-    writer.write_u32::<BE>(fst_list_offset as u32)?;
+    writer.seek(SeekFrom::Start((part_data_offset + OFFSET_DOL_OFFSET) as u64))?;
+    writer.write_u32::<BE>((dol_offset >> if is_wii {2} else {0}) as u32)?;
+    writer.write_u32::<BE>((fst_list_offset >> if is_wii {2} else {0}) as u32)?;
     writer.write_u32::<BE>(fst_len as u32)?;
     writer.write_u32::<BE>(fst_len as u32)?;
 
-    Ok(())
-}
-
-pub fn write_fs<'a>(path: PathBuf, root: &Directory<'a>) -> Result<(), Error> {
-    let path = path.clone();
-    fs::create_dir_all(&path)?;
-    let mut exculded_index: Vec<usize> = Vec::new();
-
-    let (root_index, root_dir, _) = write_data_dir(None, "&&rootdata", root, &path)?;
-    exculded_index.push(root_index);
-    if root.children.iter().map(|child| child.name()).collect::<Vec<&String>>().contains(&&String::from("&&rootdata")) {
-        for (_, node) in root_dir
-            .children
-            .iter()
-            .enumerate()
+    // encrypt the file
+    if let Some(part_header) = part_header_opt {
+        writer.flush()?;
+        let n_sectors = 900 * 64;
+        let n_clusters = n_sectors / 8;
+        let n_groups = n_clusters / 8;
+        println!("part offset: {:#010X}; sectors: {}; clusters: {}; groups: {}", part_data_offset, n_sectors, n_clusters, n_groups);
+        let mut hasher = Sha1::new();
+        // h0
+        // We also take this opportunity to spread the data to make space for the hashes
+        for i in (0 .. n_sectors).rev() {
+            let mut buf = [0u8; 0x7c00];
+            let mut hash = [0u8; 0x400];
+            print!("{} \r", i);
+            std::io::stdout().flush().unwrap();
+            reader.seek(SeekFrom::Start((part_data_offset + i * 0x7c00) as u64))?;
+            writer.seek(SeekFrom::Start((part_data_offset + i * 0x8000) as u64))?;
+            reader.read_exact(&mut buf)?;
+            for j in 0 .. 31 {
+                hasher.update(&buf[j * 0x400 .. (j + 1) * 0x400]);
+                hash[j * 20 .. (j + 1) * 20].copy_from_slice(&hasher.digest().bytes()[..]);
+            }
+            writer.write_all(&hash)?;
+            writer.write_all(&buf)?;
+        }
+        writer.flush()?;
+        println!("");
+        // h1
+        for i in 0 .. n_clusters {
+            let mut buf = [0u8; 0x26c];
+            let mut hash = [0u8; 0x0a0];
+            for j in 0 .. 8 {
+                reader.seek(SeekFrom::Start((part_data_offset + (i * 8 + j) * 0x8000) as u64))?;
+                reader.read_exact(&mut buf)?;
+                hasher.update(&buf);
+                hash[j * 20 .. (j + 1) * 20].copy_from_slice(&hasher.digest().bytes()[..]);
+            }
+            for j in 0 .. 8 {
+                writer.seek(SeekFrom::Start((part_data_offset + (i * 8 + j) * 0x8000 + 0x280) as u64))?;
+                writer.write_all(&hash)?;
+            }
+        }
+        writer.flush()?;
+        // h2
+        for i in 0 .. n_groups {
+            let mut buf = [0u8; 0x0A0];
+            let mut hash = [0u8; 0x0a0];
+            for j in 0 .. 8 {
+                reader.seek(SeekFrom::Start((part_data_offset + (i * 64 + j * 8) * 0x8000 + 0x280) as u64))?;
+                reader.read_exact(&mut buf)?;
+                hasher.update(&buf);
+                hash[j * 20 .. (j + 1) * 20].copy_from_slice(&hasher.digest().bytes()[..]);
+            }
+            for j in 0 .. 64 {
+                writer.seek(SeekFrom::Start((part_data_offset + (i * 64 + j) * 0x8000 + 0x340) as u64))?;
+                writer.write_all(&hash)?;
+            }
+        }
+        writer.flush()?;
+        // h3
+        let h3_offset = part_offset + part_header.h3_offset;
         {
-            write_files_recursive(node, &path)?;
+            let mut buf = [0u8; 0x0A0];
+            let mut hash = vec![0u8; n_groups * 20];
+            writer.seek(SeekFrom::Start((h3_offset) as u64))?;
+            for i in 0 .. n_groups {
+                reader.seek(SeekFrom::Start((part_data_offset + (i * 64) * 0x8000 + 0x340) as u64))?;
+                reader.read_exact(&mut buf)?;
+                hasher.update(&buf);
+                hash[i * 20 .. (i + 1) * 20].copy_from_slice(&hasher.digest().bytes()[..]);
+            }
+            writer.write_all(&hash)?;
+        }
+        writer.seek(SeekFrom::Start((0x60) as u64))?;
+        writer.write_all(&[1u8, 0])?;
+
+        // set partition data size
+        writer.seek(SeekFrom::Start(part_offset as u64))?;
+        let mut part_header = part_header;
+        part_header.data_size = ((data_end - part_data_offset) / 0x7c00 * 0x8000) >> 2;
+        part_header.ticket.sig.copy_from_slice(&[0u8; 0x100]);
+        writer.write_all(&<[u8; 0x2C0]>::try_from(&part_header)?)?;
+
+        // encrypt everything
+        let part_key = decrypt_title_key(&part_header.ticket);
+        for i in 0 .. n_sectors {
+            let mut hash = [0u8; 0x400];
+            let mut buf = [0u8; 0x7c00];
+            reader.seek(SeekFrom::Start((part_data_offset + i * 0x8000) as u64))?;
+            writer.seek(SeekFrom::Start((part_data_offset + i * 0x8000) as u64))?;
+            reader.read_exact(&mut hash)?;
+            reader.read_exact(&mut buf)?;
+            let mut iv = [0 as u8; 16];
+            aes_encrypt_inplace(&mut hash, &iv, &part_key, 0x400)?;
+            iv[..16].copy_from_slice(&hash[0x3D0..][..16]);
+            aes_encrypt_inplace(&mut buf, &iv, &part_key, 0x7c00)?;
+            writer.write_all(&hash)?;
+            writer.write_all(&buf)?;
         }
     }
 
-    if root.children.iter().map(|child| child.name()).collect::<Vec<&String>>().contains(&&String::from("&&systemdata")) {
-        let (sys_index, sys_dir, sys_path) = write_data_dir(Some("sys"), "&&systemdata", root, &path)?;
-        exculded_index.push(sys_index);
-
-        write_data_file(&sys_path, "boot.bin", "iso.hdr", &sys_dir)?;
-        write_data_file(&sys_path, "apploader.img", "AppLoader.ldr", &sys_dir)?;
-        write_data_file(&sys_path, "main.dol", "Start.dol", &sys_dir)?;
-        write_data_file(&sys_path, "fst.bin", "Game.toc", &sys_dir)?;
-        write_data_file(&sys_path, "bi2.bin", "bi2.bin", &sys_dir)?;
-    }
-
-    if root.children.iter().map(|child| child.name()).collect::<Vec<&String>>().contains(&&String::from("&&discdata")) {
-        let (disc_index, disc_dir, disc_path) = write_data_dir(Some("disc"), "&&discdata", root, &path)?;
-        exculded_index.push(disc_index);
-
-        for (_, sub_node) in disc_dir
-            .children
-            .iter()
-            .enumerate()
-        {
-            write_files_recursive(sub_node, &disc_path)?;
-        }
-    }
-
-    let mut files_path = path.clone();
-    files_path.push("files");
-    fs::create_dir_all(&files_path)?;
-    for (_, node) in root
-        .children
-        .iter()
-        .enumerate()
-        .filter(|&(i, _)| !exculded_index.contains(&i))
-    {
-        write_files_recursive(node, &files_path)?;
-    }
-
-    Ok(())
-}
-
-fn write_data_dir<'a>(dir_fs_name: Option<&str>, dir_given_name: &str, parent_dir: &'a Directory<'a>, path: &PathBuf) -> Result<(usize, &'a Directory<'a>, PathBuf), Error> {
-    let (dir_index, dir) = parent_dir
-        .children
-        .iter()
-        .enumerate()
-        .filter_map(|(i, c)| c.as_directory().map(|d| (i, d)))
-        .find(|&(_, d)| d.name == dir_given_name)
-        .ok_or_else(|| err_msg(format!("The {} folder contains no {}", parent_dir.name, dir_given_name)))?;
-    let mut dir_path = path.clone();
-    if let Some(dir_fs_name) = dir_fs_name {
-        dir_path.push(dir_fs_name);
-        fs::create_dir_all(&dir_path)?;
-    }
-    Ok((dir_index, dir, dir_path))
-}
-
-fn write_data_file(dir_path: &PathBuf, fs_name: &str, given_name: &str, dir: &Directory) -> Result<(), Error> {
-    let file = dir
-        .children
-        .iter()
-        .filter_map(|c| c.as_file())
-        .find(|f| f.name == given_name)
-        .ok_or_else(|| err_msg(format!("The {} folder contains no {}", dir.name, given_name)))?;
-    let mut file_path = dir_path.clone();
-    file_path.push(fs_name);
-    fs::File::create(&file_path).context(format!("Couldn't open file \"{:?}\"", file_path.to_str()))?
-        .write(&file.data).context(format!("Couldn't write to file \"{:?}\"", file_path.to_str()))?;
     Ok(())
 }
 
@@ -289,32 +343,10 @@ where
     Ok(())
 }
 
-fn write_files_recursive(
-    node: &Node,
-    parent_path: &PathBuf
-) -> Result<(), Error>
-{
-    match *node {
-        Node::Directory(ref dir) => {
-            let mut dir_path = parent_path.clone();
-            dir_path.push(&dir.name);
-            if !dir_path.exists() {
-                fs::create_dir_all(&dir_path).context(format!("Couldn't create directory \"{:?}\"", dir_path.to_str()))?;
-            }
-            for (_, sub_node) in dir
-                .children
-                .iter()
-                .enumerate()
-            {
-                write_files_recursive(sub_node, &dir_path)?;
-            }
-        }
-        Node::File(ref file) => {
-            let mut file_path = parent_path.clone();
-            file_path.push(&file.name);
-            fs::File::create(&file_path).context(format!("Couldn't open file \"{:?}\"", file_path.to_str()))?
-                .write(&file.data).context(format!("Couldn't write to file \"{:?}\"", file_path.to_str()))?;
-        }
-    }
-    Ok(())
+fn fetch_file<'a, 'b>(dir: &'b Directory<'a>, name: String) -> Result<&'b File<'a>, failure::Error> {
+    dir.children
+       .iter()
+       .filter_map(|c| c.as_file())
+       .find(|f| f.name == name)
+       .ok_or_else(|| err_msg(format!("The {} folder contains no {}", dir.name, name)))
 }

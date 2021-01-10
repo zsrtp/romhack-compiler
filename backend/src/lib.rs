@@ -13,6 +13,7 @@ extern crate standalone_syn as syn;
 extern crate toml;
 extern crate zip;
 extern crate wii_crypto;
+extern crate sha1;
 
 mod assembler;
 mod banner;
@@ -44,7 +45,7 @@ use std::path::PathBuf;
 use std::process::Command;
 use zip::{write::FileOptions, ZipArchive, ZipWriter};
 use wii_crypto::wii_disc::parse_disc;
-use wii_crypto::wii_disc::Partition;
+use wii_crypto::wii_disc::Partitions;
 use byteorder::{ByteOrder, BE};
 
 pub fn build<P: KeyValPrint>(printer: &P, debug: bool, patch: bool) -> Result<(), Error> {
@@ -342,7 +343,7 @@ pub fn build_iso<'a, P: KeyValPrint, F: FileSource>(
     compiled_library: Vec<u8>,
     config: &'a mut Config,
 ) -> Result<Directory<'a>, Error> {
-    let mut part_opt: Option<Partition> = None;
+    let mut part_opt: Option<Partitions> = None;
     if is_wii(original_iso) {
         printer.print(None, "Decrypting", "partitions");
         match parse_disc(&mut original_iso[..]) {
@@ -505,8 +506,9 @@ pub fn build_and_emit_iso<P: KeyValPrint, F: FileSource>(
     iso::writer::write_iso(
         BufWriter::with_capacity(
             4 << 20,
-            File::create(out_path).context("Couldn't create the final ISO")?,
+            File::create(out_path.clone()).context("Couldn't create the final ISO")?,
         ),
+        File::open(out_path).context("Couldn't open the final ISO")?,
         &iso,
     )
     .context("Couldn't write the final ISO")?;
