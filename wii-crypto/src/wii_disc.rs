@@ -3,6 +3,7 @@ use crate::consts;
 use aes::Aes128;
 use block_modes::{BlockMode, Cbc};
 use block_modes::block_padding::NoPadding;
+use sha1::Sha1;
 use std::mem;
 use std::convert::TryFrom;
 use byteorder::{BE, ByteOrder};
@@ -412,4 +413,143 @@ pub fn parse_disc(buf: &mut [u8]) -> Result<Option<Partitions>, WiiCryptoError> 
     // }
     return Ok(ret);
     // }
+}
+
+pub fn finalize_iso(patched_partition: &[u8], original_iso: &mut [u8]) -> Result<(), std::io::Error> {
+    // We use the original iso as a buffer to work on inplace.
+    let mut part_opt: Option<Partition> = None;
+
+    let part_info = disc_get_part_info(&original_iso[..]);
+    for entry in part_info.entries.iter() {
+        let part = Partition {
+            part_offset: entry.offset,
+            part_type: entry.part_type,
+            header: PartHeader::try_from(&original_iso[entry.offset..][..0x2C0]).expect("Invalid partition header."),
+        };
+        if entry.part_type == 0 && part_opt.is_none() {
+            part_opt = Some(part);
+        }
+    }
+
+    if let Some(part) = part_opt {
+        let part_data_offset = part.part_offset + part.header.data_offset;
+        let n_sectors = part.header.data_size / 0x8000;
+
+        // reset partition to 0
+        for i in part_data_offset .. part_data_offset + part.header.data_size {
+            original_iso[i] = 0;
+        }
+
+        // Put the data in place
+        for i in 0.. (patched_partition.len() / consts::WII_SECTOR_DATA_SIZE) {
+            original_iso[part_data_offset + i * consts::WII_SECTOR_SIZE + consts::WII_SECTOR_HASH_SIZE ..][.. consts::WII_SECTOR_DATA_SIZE]
+                .copy_from_slice(&patched_partition[i * consts::WII_SECTOR_DATA_SIZE..][.. consts::WII_SECTOR_DATA_SIZE]);
+        }
+
+        hash_partition(&mut original_iso[part.part_offset ..][.. part.header.data_offset + part.header.data_size]);
+        // original_iso[0x60] = 1u8;
+
+        // set partition data size
+        let mut part_header = part.header;
+        // part_header.data_size = ((data_end - part_data_offset) / 0x7c00 * 0x8000) >> 2;
+        part_header.ticket.sig.copy_from_slice(&[0u8; 0x100]);
+        original_iso[part.part_offset..][.. 0x2C0].copy_from_slice(&<[u8; 0x2C0]>::try_from(&part_header).expect("Invalid partition header."));
+
+        // encrypt everything
+        let part_key = decrypt_title_key(&part_header.ticket);
+
+        let mut data_pool: Vec<&mut[u8]> = Vec::with_capacity(n_sectors);
+        let (_, mut data_slice) = original_iso.split_at_mut(part.part_offset + part.header.data_offset);
+        for _ in 0 .. n_sectors {
+            let (section, new_data_slice) = data_slice.split_at_mut(consts::WII_SECTOR_SIZE);
+            data_slice = new_data_slice;
+            data_pool.push(section);
+        }
+        data_pool.par_iter_mut().for_each(|data| {
+            let mut iv = [0 as u8; consts::WII_KEY_SIZE];
+            aes_encrypt_inplace(&mut data[..consts::WII_SECTOR_HASH_SIZE], &iv, &part_key, consts::WII_SECTOR_HASH_SIZE).expect("Could not encrypt hash sector");
+            iv[..consts::WII_KEY_SIZE].copy_from_slice(&data[consts::WII_SECTOR_IV_OFF..][..consts::WII_KEY_SIZE]);
+            aes_encrypt_inplace(&mut data[consts::WII_SECTOR_HASH_SIZE..][..consts::WII_SECTOR_DATA_SIZE], &iv, &part_key, consts::WII_SECTOR_DATA_SIZE).expect("Could not encrypt data sector");
+        });
+    }
+
+    Ok(())
+}
+
+fn hash_partition(partition: &mut [u8]) {
+    let header = PartHeader::try_from(&partition[..0x2C0]).expect("Invalid partition header.");
+    let n_sectors = header.data_size / 0x8000;
+    let n_clusters = n_sectors / 8;
+    let n_groups = n_clusters / 8;
+    println!("part offset: {:#010X}; sectors: {}; clusters: {}; groups: {}", header.data_offset, n_sectors, n_clusters, n_groups);
+
+    // h0
+    println!("h0");
+    let mut data_pool: Vec<&mut[u8]> = Vec::with_capacity(n_sectors);
+    let (_, mut data_slice) = partition.split_at_mut(header.data_offset);
+    for _ in 0 .. n_sectors {
+        let (section, new_data_slice) = data_slice.split_at_mut(consts::WII_SECTOR_SIZE);
+        data_slice = new_data_slice;
+        data_pool.push(section);
+    }
+    data_pool.par_iter_mut().for_each(|data| {
+        let mut hash = [0u8; 0x400];
+        for j in 0 .. 31 {
+            hash[j * 20 .. (j + 1) * 20].copy_from_slice(&Sha1::from(&data[consts::WII_SECTOR_HASH_SIZE + j * 0x400 ..][.. 0x400]).digest().bytes()[..]);
+        }
+        data[.. 0x400].copy_from_slice(&hash);
+    });
+    // h1
+    println!("h1");
+    let mut data_pool: Vec<&mut[u8]> = Vec::with_capacity(n_clusters);
+    let (_, mut data_slice) = partition.split_at_mut(header.data_offset);
+    for _ in 0 .. n_clusters {
+        let (section, new_data_slice) = data_slice.split_at_mut(consts::WII_SECTOR_SIZE * 8);
+        data_slice = new_data_slice;
+        data_pool.push(section);
+    }
+    data_pool.par_iter_mut().for_each(|data| {
+        let mut hash = [0u8; 0x0a0];
+        for j in 0 .. 8 {
+            hash[j * 20 .. (j + 1) * 20].copy_from_slice(&Sha1::from(&data[j * 0x8000 ..][.. 0x26c]).digest().bytes()[..]);
+        }
+        for j in 0 .. 8 {
+            data[j * 0x8000 + 0x280..][.. 0xa0].copy_from_slice(&hash);
+        }
+    });
+    // h2
+    println!("h2");
+    let mut data_pool: Vec<&mut[u8]> = Vec::with_capacity(n_groups);
+    let (_, mut data_slice) = partition.split_at_mut(header.data_offset);
+    for _ in 0 .. n_groups {
+        let (section, new_data_slice) = data_slice.split_at_mut(consts::WII_SECTOR_SIZE * 64);
+        data_slice = new_data_slice;
+        data_pool.push(section);
+    }
+    data_pool.par_iter_mut().for_each(|data| {
+        let mut hash = [0u8; 0x0a0];
+        for j in 0 .. 8 {
+            hash[j * 20 .. (j + 1) * 20].copy_from_slice(&Sha1::from(&data[j * 8 * 0x8000 + 0x280 ..][.. 0xa0]).digest().bytes()[..]);
+        }
+        for j in 0 .. 64 {
+            data[j * 0x8000 + 0x340..][.. 0xa0].copy_from_slice(&hash);
+        }
+    });
+    // h3
+    println!("h3");
+    let h3_offset = header.h3_offset;
+    let mut data_pool: Vec<(&mut[u8], &mut[u8])> = Vec::with_capacity(n_groups);
+    let (h3, mut data_slice) = partition.split_at_mut(header.data_offset);
+    let (_, mut h3) = h3.split_at_mut(h3_offset);
+    for _ in 0 .. n_groups {
+        let (section, new_data_slice) = data_slice.split_at_mut(consts::WII_SECTOR_SIZE * 64);
+        let (hash_section, new_h3) = h3.split_at_mut(20);
+        data_slice = new_data_slice;
+        h3 = new_h3;
+        data_pool.push((hash_section, section));
+    }
+    data_pool.par_iter_mut().for_each(|(hash, sector)| {
+        hash[..20].copy_from_slice(&Sha1::from(&sector[0x340..][.. 0xa0]).digest().bytes()[..]);
+    });
+    println!("hashing done.");
 }

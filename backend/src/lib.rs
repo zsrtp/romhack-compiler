@@ -13,7 +13,6 @@ extern crate standalone_syn as syn;
 extern crate toml;
 extern crate zip;
 extern crate wii_crypto;
-extern crate sha1;
 
 mod assembler;
 mod banner;
@@ -44,8 +43,8 @@ use std::mem;
 use std::path::PathBuf;
 use std::process::Command;
 use zip::{write::FileOptions, ZipArchive, ZipWriter};
-use wii_crypto::wii_disc::parse_disc;
-use wii_crypto::wii_disc::Partitions;
+use wii_crypto::wii_disc::{parse_disc, finalize_iso, Partitions};
+use wii_crypto::array_stream::{VecWriter};
 use byteorder::{ByteOrder, BE};
 
 pub fn build<P: KeyValPrint>(printer: &P, debug: bool, patch: bool) -> Result<(), Error> {
@@ -503,15 +502,30 @@ pub fn build_and_emit_iso<P: KeyValPrint, F: FileSource>(
 
     printer.print(None, "Building", "ISO");
 
-    iso::writer::write_iso(
-        BufWriter::with_capacity(
-            4 << 20,
-            File::create(out_path.clone()).context("Couldn't create the final ISO")?,
-        ),
-        File::open(out_path).context("Couldn't open the final ISO")?,
-        &iso,
-    )
-    .context("Couldn't write the final ISO")?;
+        // File::open(out_path).context("Couldn't open the final ISO")?,
+    if !iso.is_wii_iso() {
+        iso::writer::write_iso(
+            &mut BufWriter::with_capacity(
+                4 << 20,
+                File::create(out_path.clone()).context("Couldn't create the final ISO")?,
+            ),
+            &iso,
+        )
+        .context("Couldn't write the final ISO")?;
+    }
+    else {
+        let mut file_writer = File::create(out_path.clone()).context("Couldn't create the final ISO")?;
+        let mut vec_writer = BufWriter::with_capacity(4 << 20, VecWriter::new());
+        iso::writer::write_iso(
+            &mut vec_writer,
+            &iso,
+        )
+        .context("Couldn't write the final ISO")?;
+        printer.print(None, "Encrypting", "ISO");
+        finalize_iso(vec_writer.into_inner()?.as_slice(), &mut buf)?;
+        printer.print(None, "Writing", "ISO to file");
+        file_writer.write_all(&buf)?;
+    }
 
     Ok(())
 }

@@ -3,10 +3,12 @@ extern crate byteorder;
 extern crate lazy_static;
 extern crate block_modes;
 extern crate aes;
+extern crate sha1;
 extern crate rayon;
 extern crate failure;
 
 pub mod wii_disc;
+pub mod array_stream;
 
 pub mod consts {
     // DOL_ALIGNMENT and FST_ALIGNMENT are set to 1024 and 256 to match the
