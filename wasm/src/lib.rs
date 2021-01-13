@@ -142,11 +142,11 @@ fn try_create_romhack(patch: &[u8], iso: &mut [u8]) -> Result<(), Error> {
     }
     let romhack = build_iso(&JSPrinter, zip, iso, compiled_library, &mut config)?;
     JSPrinter.print(None, "Measuring", "Rom Hack File Size");
-    write_iso(RomHackCounter, &romhack)?;
+    write_iso(&mut RomHackCounter, &romhack)?;
 
     restart();
 
     JSPrinter.print(None, "Writing", "Rom Hack");
-    let writer = BufWriter::new(RomHackWriter);
-    write_iso(writer, &romhack)
+    let mut writer = BufWriter::new(RomHackWriter);
+    write_iso(&mut writer, &romhack)
 }
