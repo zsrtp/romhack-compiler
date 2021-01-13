@@ -20,6 +20,7 @@ pub mod consts {
     pub const WII_HASH_SIZE: usize = 20;
     pub const WII_KEY_SIZE: usize = 16;
     pub const WII_CKEY_AMNT: usize = 3;
+    pub const WII_H3_SIZE: usize = 0x18000;
     pub const WII_SECTOR_HASH_SIZE: usize = 0x400;
     pub const WII_SECTOR_SIZE: usize = 0x8000;
     pub const WII_SECTOR_DATA_SIZE: usize = WII_SECTOR_SIZE - WII_SECTOR_HASH_SIZE;

@@ -175,11 +175,11 @@ pub struct Ticket {
     pub n_dlc: u16,
     pub unk4: [u8; 0x09],
     pub common_key_index: u8,
-    pub unk5: [u8; 0x70],
+    pub unk5: [u8; 0x50],
     pub padding2: u16,
     pub enable_time_limit: u32,
     pub time_limit: u32,
-    pub time_limits: [u8; 0x38],
+    pub fake_sign: [u8; 0x58],
 }
 declare_tryfrom!(Ticket);
 
@@ -197,8 +197,8 @@ impl From<&[u8; Ticket::BLOCK_SIZE]> for Ticket {
         let mut ticket_id = [0 as u8; 0x08];
         let mut title_id = [0 as u8; 0x08];
         let mut unk4 = [0 as u8; 0x09];
-        let mut unk5 = [0 as u8; 0x70];
-        let mut time_limits = [0 as u8; 0x38];
+        let mut unk5 = [0 as u8; 0x50];
+        let mut fake_sign = [0 as u8; 0x58];
         unsafe {
             sig.copy_from_slice(&buf[0x4..0x104]);
             sig_padding.copy_from_slice(&buf[0x104..0x140]);
@@ -208,8 +208,8 @@ impl From<&[u8; Ticket::BLOCK_SIZE]> for Ticket {
             ticket_id.copy_from_slice(&buf[0x1D0..0x1D8]);
             title_id.copy_from_slice(&buf[0x1DC..0x1E4]);
             unk4.copy_from_slice(&buf[0x1E8..0x1F1]);
-            unk5.copy_from_slice(&buf[0x1F2..0x262]);
-            time_limits.copy_from_slice(&buf[0x26C..0x2A4]);
+            unk5.copy_from_slice(&buf[0x1F2..0x242]);
+            fake_sign.copy_from_slice(&buf[0x24C..0x2A4]);
         };
         Ticket {
             sig_type: BE::read_u32(&buf[0x00..]),
@@ -227,10 +227,10 @@ impl From<&[u8; Ticket::BLOCK_SIZE]> for Ticket {
             unk4: unk4,
             common_key_index: buf[0x1F1],
             unk5: unk5,
-            padding2: BE::read_u16(&buf[0x262..]),
-            enable_time_limit: BE::read_u32(&buf[0x264..]),
-            time_limit: BE::read_u32(&buf[0x268..]),
-            time_limits: time_limits,
+            padding2: BE::read_u16(&buf[0x242..]),
+            enable_time_limit: BE::read_u32(&buf[0x244..]),
+            time_limit: BE::read_u32(&buf[0x248..]),
+            fake_sign: fake_sign,
         }
     }
 }
@@ -253,11 +253,11 @@ impl From<&Ticket> for [u8; Ticket::BLOCK_SIZE] {
             BE::write_u16(&mut buf[0x1E6..], t.n_dlc);
             (&mut buf[0x1E8..0x1F1]).copy_from_slice(&t.unk4[..]);
             buf[0x1F1] = t.common_key_index;
-            (&mut buf[0x1F2..0x262]).copy_from_slice(&t.unk5[..]);
-            BE::write_u16(&mut buf[0x262..], t.padding2);
-            BE::write_u32(&mut buf[0x264..], t.enable_time_limit);
-            BE::write_u32(&mut buf[0x268..], t.time_limit);
-            (&mut buf[0x26C..0x2A4]).copy_from_slice(&t.time_limits[..]);
+            (&mut buf[0x1F2..0x242]).copy_from_slice(&t.unk5[..]);
+            BE::write_u16(&mut buf[0x242..], t.padding2);
+            BE::write_u32(&mut buf[0x244..], t.enable_time_limit);
+            BE::write_u32(&mut buf[0x248..], t.time_limit);
+            (&mut buf[0x24C..0x2A4]).copy_from_slice(&t.fake_sign[..]);
         };
         buf
     }
@@ -311,6 +311,110 @@ impl From<&PartHeader> for [u8; PartHeader::BLOCK_SIZE] {
 }
 
 #[derive(Debug, Clone, Copy)]
+pub struct TMDContent {
+    pub content_id: u32,
+    pub index: u16,
+    pub content_type: u16,
+    pub size: u64,
+    pub hash: [u8; consts::WII_HASH_SIZE],
+}
+
+#[derive(Debug, Clone)]
+pub struct TitleMetaData {
+    pub sig_type: u32,
+    pub signature: [u8; 0x100],
+    pub padding: [u8; 60],
+    pub issuer: [u8; 0x40],
+    pub version: u8,
+    pub ca_crl_version: u8,
+    pub signer_crl_version: u8,
+    pub is_v_wii: bool,
+    pub system_version: u64,
+    pub title_id: [u8; 8],
+    pub title_type: u32,
+    pub group_id: u16,
+    pub fake_sign: [u8; 0x3e],
+    pub access_rights: u32,
+    pub title_version: u16,
+    pub n_content: u16,
+    pub boot_index: u16,
+    pub padding3: [u8; 2],
+    pub contents: Vec<TMDContent>,
+}
+
+pub fn partition_get_tmd(partition: &[u8], tmd_offset: usize) -> TitleMetaData {
+    let mut tmd = TitleMetaData {
+        sig_type: BE::read_u32(&partition[tmd_offset..]),
+        signature: [0u8; 0x100],
+        padding: [0u8; 60],
+        issuer: [0u8; 0x40],
+        version: partition[tmd_offset + 0x180],
+        ca_crl_version: partition[tmd_offset + 0x181],
+        signer_crl_version: partition[tmd_offset + 0x182],
+        is_v_wii: partition[tmd_offset + 0x183] != 0,
+        system_version: BE::read_u64(&partition[tmd_offset + 0x184..]),
+        title_id: [0u8; 8],
+        title_type: BE::read_u32(&partition[tmd_offset + 0x194..]),
+        group_id: BE::read_u16(&partition[tmd_offset + 0x198..]),
+        fake_sign: [0u8; 0x3e],
+        access_rights: BE::read_u32(&partition[tmd_offset + 0x1d8..]),
+        title_version: BE::read_u16(&partition[tmd_offset + 0x1dc..]),
+        n_content: BE::read_u16(&partition[tmd_offset + 0x1de..]),
+        boot_index: BE::read_u16(&partition[tmd_offset + 0x1e0..]),
+        padding3: [0u8; 2],
+        contents: Vec::with_capacity(BE::read_u16(&partition[tmd_offset + 0x1de..]) as usize),
+    };
+    for i in 0.. tmd.n_content as usize {
+        let mut content = TMDContent {
+            content_id: BE::read_u32(&partition[tmd_offset + 0x1E4 + i * 36 ..]),
+            index: BE::read_u16(&partition[tmd_offset + 0x1E8 + i * 36 ..]),
+            content_type: BE::read_u16(&partition[tmd_offset + 0x1EA + i * 36 ..]),
+            size: BE::read_u64(&partition[tmd_offset + 0x1EC + i * 36 ..]),
+            hash: [0u8; consts::WII_HASH_SIZE],
+        };
+        content.hash.copy_from_slice(&partition[tmd_offset + 0x1F4 + i * 36 ..][.. consts::WII_HASH_SIZE]);
+        tmd.contents.push(content);
+    }
+    tmd.signature.copy_from_slice(&partition[tmd_offset + 0x4..][..0x100]);
+    tmd.padding.copy_from_slice(&partition[tmd_offset + 0x104..][..60]);
+    tmd.issuer.copy_from_slice(&partition[tmd_offset + 0x140..][..0x40]);
+    tmd.title_id.copy_from_slice(&partition[tmd_offset + 0x18c..][..8]);
+    tmd.fake_sign.copy_from_slice(&partition[tmd_offset + 0x19a..][..0x3e]);
+    tmd.padding3.copy_from_slice(&partition[tmd_offset + 0x1e2..][..2]);
+    tmd
+}
+
+pub fn partition_set_tmd(partition: &mut [u8], tmd_offset: usize, tmd: &TitleMetaData) -> usize {
+    BE::write_u32(&mut partition[tmd_offset..], tmd.sig_type);
+    partition[tmd_offset + 0x4..][..0x100].copy_from_slice(&tmd.signature);
+    partition[tmd_offset + 0x104..][..60].copy_from_slice(&tmd.padding);
+    partition[tmd_offset + 0x140..][..0x40].copy_from_slice(&tmd.issuer);
+    partition[tmd_offset + 0x180] = tmd.version;
+    partition[tmd_offset + 0x181] = tmd.ca_crl_version;
+    partition[tmd_offset + 0x182] = tmd.signer_crl_version;
+    partition[tmd_offset + 0x183] = if tmd.is_v_wii {1} else {0};
+    BE::write_u64(&mut partition[tmd_offset + 0x184..], tmd.system_version);
+    partition[tmd_offset + 0x18c..][..8].copy_from_slice(&tmd.title_id);
+    BE::write_u32(&mut partition[tmd_offset + 0x194..], tmd.title_type);
+    BE::write_u16(&mut partition[tmd_offset + 0x198..], tmd.group_id);
+    partition[tmd_offset + 0x19a..][..0x3e].copy_from_slice(&tmd.fake_sign);
+    BE::write_u32(&mut partition[tmd_offset + 0x1d8..], tmd.access_rights);
+    BE::write_u16(&mut partition[tmd_offset + 0x1dc..], tmd.title_version);
+    BE::write_u16(&mut partition[tmd_offset + 0x1de..], tmd.contents.len() as u16);
+    BE::write_u16(&mut partition[tmd_offset + 0x1e0..], tmd.boot_index);
+    partition[tmd_offset + 0x1e2..][..2].copy_from_slice(&tmd.padding3);
+    for (i, content) in tmd.contents.iter().enumerate() {
+        BE::write_u32(&mut partition[tmd_offset + 0x1E4 + i * 36 ..], content.content_id);
+        BE::write_u16(&mut partition[tmd_offset + 0x1E8 + i * 36 ..], content.index);
+        BE::write_u16(&mut partition[tmd_offset + 0x1EA + i * 36 ..], content.content_type);
+        BE::write_u64(&mut partition[tmd_offset + 0x1EC + i * 36 ..], content.size);
+        partition[tmd_offset + 0x1F4 + i * 36 ..][.. consts::WII_HASH_SIZE].copy_from_slice(&content.hash);
+    }
+
+    0x1E4 + 36 * tmd.contents.len()
+}
+
+#[derive(Debug, Clone, Copy)]
 pub struct Partition {
     pub part_type: u32,
     pub part_offset: usize,
@@ -347,7 +451,7 @@ pub fn decrypt_title_key(tik: &Ticket) -> [u8; 0x10] {
     buf
 }
 
-fn decrypt_partition_inplace<'a>(buf: &'a mut [u8], part: Partition) -> Result<(), WiiCryptoError> {
+fn decrypt_partition_inplace<'a>(buf: &'a mut [u8], part: &Partition) -> Result<(), WiiCryptoError> {
     let part_key = decrypt_title_key(&part.header.ticket);
     let sector_count = part.header.data_size / 0x8000;
     let mut data_pool: Vec<&mut[u8]> = Vec::with_capacity(sector_count);
@@ -368,9 +472,9 @@ fn decrypt_partition_inplace<'a>(buf: &'a mut [u8], part: Partition) -> Result<(
         data.copy_from_slice(&buf[part.part_offset + part.header.data_offset + i * consts::WII_SECTOR_SIZE + consts::WII_SECTOR_HASH_SIZE..part.part_offset + part.header.data_offset + (i + 1) * consts::WII_SECTOR_SIZE]);
         buf[part.part_offset + part.header.data_offset + i * consts::WII_SECTOR_DATA_SIZE..][..consts::WII_SECTOR_DATA_SIZE].copy_from_slice(&data);
     }
-    println!("");
-    println!("title code: {}", String::from_utf8_lossy(&buf[part.part_offset + part.header.data_offset..][..0x06]));
-    println!("title code of the partition: {}", String::from_utf8_lossy(&buf[part.part_offset + part.header.data_offset..][0x20..0x46]));
+    // println!("");
+    // println!("title code: {}", String::from_utf8_lossy(&buf[part.part_offset + part.header.data_offset..][..0x06]));
+    // println!("title code of the partition: {}", String::from_utf8_lossy(&buf[part.part_offset + part.header.data_offset..][0x20..0x46]));
     return Ok(());
 }
 
@@ -392,10 +496,10 @@ pub fn parse_disc(buf: &mut [u8]) -> Result<Option<Partitions>, WiiCryptoError> 
             part_type: entry.part_type,
             header: PartHeader::try_from(&buf[entry.offset..][..0x2C0])?,
         };
-        println!("part{}: part type={}, part offset={:08X}; tmd size={}, tmd offset={:08X}; cert size={}, cert offset={:08X}; h3 offset={:08X}; data size={}, data offset={:08X}", i, part.part_type, part.part_offset, part.header.tmd_size, part.header.tmd_offset, part.header.cert_size, part.header.cert_offset, part.header.h3_offset, part.header.data_size, part.header.data_offset);
+        // println!("part{}: part type={}, part offset={:08X}; tmd size={}, tmd offset={:08X}; cert size={}, cert offset={:08X}; h3 offset={:08X}; data size={}, data offset={:08X}", i, part.part_type, part.part_offset, part.header.tmd_size, part.header.tmd_offset, part.header.cert_size, part.header.cert_offset, part.header.h3_offset, part.header.data_size, part.header.data_offset);
         if part.part_type == 0 && data_idx.is_none() {
             data_idx = Some(i);
-            decrypt_partition_inplace(buf, part)?;
+            decrypt_partition_inplace(buf, &part)?;
         }
         ret_vec.push(part);
     }
@@ -430,6 +534,9 @@ pub fn finalize_iso(patched_partition: &[u8], original_iso: &mut [u8]) -> Result
             part_opt = Some(part);
         }
     }
+    let mut part_info = part_info;
+    part_info.entries.retain(|&e| e.part_type == 0);
+    disc_set_part_info(&mut original_iso[..], &part_info);
 
     if let Some(part) = part_opt {
         let part_data_offset = part.part_offset + part.header.data_offset;
@@ -450,10 +557,7 @@ pub fn finalize_iso(patched_partition: &[u8], original_iso: &mut [u8]) -> Result
         // original_iso[0x60] = 1u8;
 
         // set partition data size
-        let mut part_header = part.header;
-        // part_header.data_size = ((data_end - part_data_offset) / 0x7c00 * 0x8000) >> 2;
-        part_header.ticket.sig.copy_from_slice(&[0u8; 0x100]);
-        original_iso[part.part_offset..][.. 0x2C0].copy_from_slice(&<[u8; 0x2C0]>::try_from(&part_header).expect("Invalid partition header."));
+        let part_header = part.header;
 
         // encrypt everything
         let part_key = decrypt_title_key(&part_header.ticket);
@@ -481,10 +585,10 @@ fn hash_partition(partition: &mut [u8]) {
     let n_sectors = header.data_size / 0x8000;
     let n_clusters = n_sectors / 8;
     let n_groups = n_clusters / 8;
-    println!("part offset: {:#010X}; sectors: {}; clusters: {}; groups: {}", header.data_offset, n_sectors, n_clusters, n_groups);
+    // println!("part offset: {:#010X}; sectors: {}; clusters: {}; groups: {}", header.data_offset, n_sectors, n_clusters, n_groups);
 
     // h0
-    println!("h0");
+    // println!("h0");
     let mut data_pool: Vec<&mut[u8]> = Vec::with_capacity(n_sectors);
     let (_, mut data_slice) = partition.split_at_mut(header.data_offset);
     for _ in 0 .. n_sectors {
@@ -500,7 +604,7 @@ fn hash_partition(partition: &mut [u8]) {
         data[.. 0x400].copy_from_slice(&hash);
     });
     // h1
-    println!("h1");
+    // println!("h1");
     let mut data_pool: Vec<&mut[u8]> = Vec::with_capacity(n_clusters);
     let (_, mut data_slice) = partition.split_at_mut(header.data_offset);
     for _ in 0 .. n_clusters {
@@ -518,7 +622,7 @@ fn hash_partition(partition: &mut [u8]) {
         }
     });
     // h2
-    println!("h2");
+    // println!("h2");
     let mut data_pool: Vec<&mut[u8]> = Vec::with_capacity(n_groups);
     let (_, mut data_slice) = partition.split_at_mut(header.data_offset);
     for _ in 0 .. n_groups {
@@ -536,8 +640,11 @@ fn hash_partition(partition: &mut [u8]) {
         }
     });
     // h3
-    println!("h3");
+    // println!("h3");
     let h3_offset = header.h3_offset;
+    // zero the h3 table
+    partition[h3_offset..][..0x18000].copy_from_slice(&[0u8; 0x18000]);
+    // divide and conquer
     let mut data_pool: Vec<(&mut[u8], &mut[u8])> = Vec::with_capacity(n_groups);
     let (h3, mut data_slice) = partition.split_at_mut(header.data_offset);
     let (_, mut h3) = h3.split_at_mut(h3_offset);
@@ -551,5 +658,65 @@ fn hash_partition(partition: &mut [u8]) {
     data_pool.par_iter_mut().for_each(|(hash, sector)| {
         hash[..20].copy_from_slice(&Sha1::from(&sector[0x340..][.. 0xa0]).digest().bytes()[..]);
     });
-    println!("hashing done.");
+    // h4 / TMD
+    let mut tmd = partition_get_tmd(partition, header.tmd_offset);
+    let mut tmd_size = 0x1e4 + 36 * tmd.contents.len();
+    if tmd.contents.len() > 0 {
+        let content = &mut tmd.contents[0];
+        content.hash.copy_from_slice(&Sha1::from(&partition[h3_offset..][.. 0x18000]).digest().bytes()[..]);
+        tmd_size = partition_set_tmd(partition, header.tmd_offset, &tmd);
+    }
+    tmd_fake_sign(&mut partition[header.tmd_offset..][.. tmd_size]);
+    ticket_fake_sign(&mut partition[.. Ticket::BLOCK_SIZE]);
+    // println!("hashing done.");
+}
+
+pub fn tmd_fake_sign(tmd_buf: &mut[u8]) {
+    let mut tmd = partition_get_tmd(tmd_buf, 0);
+    tmd.signature.copy_from_slice(&[0u8; 0x100]);
+    tmd.padding.copy_from_slice(&[0u8; 60]);
+    tmd.fake_sign.copy_from_slice(&[0u8; 0x3e]);
+    let tmd_size = partition_set_tmd(tmd_buf, 0, &tmd);
+    // start brute force
+    // println!("TMD fake singing; starting brute force...");
+    let mut val = 0u32;
+    let mut hash = [0u8; consts::WII_HASH_SIZE];
+    loop {
+        BE::write_u32(&mut tmd_buf[0x19a..][..4], val);
+        hash.copy_from_slice(&Sha1::from(&tmd_buf[0x140..][.. tmd_size - 0x140]).digest().bytes()[..]);
+        if hash[0] == 0 {
+            break;
+        }
+
+        if val == std::u32::MAX {
+            break;
+        }
+        val+=1;
+    }
+    // println!("TMD fake signing status: hash[0]={}, attempt(s)={}", hash[0], val);
+}
+
+pub fn ticket_fake_sign(tik_buf: &mut[u8]) {
+    let mut tik = Ticket::try_from(&tik_buf[..Ticket::BLOCK_SIZE]).unwrap();
+    tik.sig.copy_from_slice(&[0u8; 0x100]);
+    tik.sig_padding.copy_from_slice(&[0u8; 0x3c]);
+    tik.fake_sign.copy_from_slice(&[0u8; 0x58]);
+    tik_buf[.. Ticket::BLOCK_SIZE].copy_from_slice(&<[u8; Ticket::BLOCK_SIZE]>::try_from(&tik).unwrap());
+    // start brute force
+    // println!("Ticket fake singing; starting brute force...");
+    let mut val = 0u32;
+    let mut hash = [0u8; consts::WII_HASH_SIZE];
+    loop {
+        BE::write_u32(&mut tik_buf[0x248..][..4], val);
+        hash.copy_from_slice(&Sha1::from(&tik_buf[0x140..][.. Ticket::BLOCK_SIZE - 0x140]).digest().bytes()[..]);
+        if hash[0] == 0 {
+            break;
+        }
+
+        if val == std::u32::MAX {
+            break;
+        }
+        val+=1;
+    }
+    // println!("Ticket fake signing status: hash[0]={}, attempt(s)={}", hash[0], val);
 }

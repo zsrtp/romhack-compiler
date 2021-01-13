@@ -69,7 +69,6 @@ pub fn load_iso<'a>(buf: &'a [u8], parts_opt: &Option<Partitions>) -> Result<Dir
         .push(Node::File(File::new("iso.hdr", &buf[partition_offset..partition_offset + HEADER_LENGTH])));
 
     let dol_offset = (BE::read_u32(&buf[partition_offset + OFFSET_DOL_OFFSET..]) as usize) << (if is_wii {2} else {0});
-    println!("dol offset: {}", dol_offset);
 
     sys_data.children.push(Node::File(File::new(
         "AppLoader.ldr",
@@ -145,46 +144,3 @@ fn get_file_data<'a>(fst_data: &FstEntry<'a>, buf: &'a [u8], part_opt: &Option<P
 fn is_wii(buf: &[u8]) -> bool {
     BE::read_u32(&buf[OFFSET_WII_MAGIC..]) == 0x5D1C9EA3
 }
-
-// fn read_partition(in_buf: &[u8], out_buf: &mut [u8], offset: usize, size: usize, part_opt: &Option<Partition>) {
-//     let mut block = [0u8; 0x7c00];
-//     if let Some(part) = part_opt {
-//         let mut offset = offset;
-//         let mut len = size;
-//         let mut out_offset = 0usize;
-//         while len > 0 {
-//             let offset_in_block = offset % 0x7c00;
-//             let mut len_in_block = 0x7c00 - offset_in_block;
-//             if len_in_block > len {
-//                 len_in_block = len;
-//             }
-//             let block_no = offset / 0x7c00;
-//             block.copy_from_slice(&in_buf[part.part_offset + 0x8000 * block_no + 0x400..][..0x7c00]);
-//             out_buf[out_offset..][..len_in_block].copy_from_slice(&block[offset_in_block..][..len_in_block]);
-//             out_offset += len_in_block;
-//             offset += len_in_block;
-//             len -= len_in_block;
-//         }
-//     } else {
-//         out_buf.copy_from_slice(&in_buf[offset..][..size]);
-//     }
-// }
-
-// fn read(buf: &[u8], offset: usize, size: usize, part_opt: &Option<Partition>) -> Vec<u8> {
-//     let mut out: Vec<u8> = Vec::new();
-//     out.resize(size, 0);
-//     read_partition(buf, &mut out[..], offset, size, part_opt);
-//     out
-// }
-
-// fn read_u16(buf: &[u8], offset: usize, part_opt: &Option<Partition>) -> u16 {
-//     let mut block = [0u8; 0x2];
-//     read_partition(buf, &mut block, offset, 4, part_opt);
-//     BE::read_u16(&block[..])
-// }
-
-// fn read_u32(buf: &[u8], offset: usize, part_opt: &Option<Partition>) -> u32 {
-//     let mut block = [0u8; 0x4];
-//     read_partition(buf, &mut block, offset, 4, part_opt);
-//     BE::read_u32(&block[..])
-// }
