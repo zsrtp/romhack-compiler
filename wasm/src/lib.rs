@@ -1,5 +1,6 @@
 extern crate failure;
 extern crate romhack_backend;
+extern crate wii_crypto;
 extern crate wasm_bindgen;
 
 use failure::Error;
@@ -121,7 +122,7 @@ pub extern "C" fn create_romhack(
         let patch = from_raw_parts(patch_ptr, patch_len);
         let iso = from_raw_parts(iso_ptr, iso_len);
         let mut buf = Vec::from(iso);
-        if let Err(e) = try_create_romhack(patch, &mut buf[..]) {
+        if let Err(e) = try_create_romhack(patch, &mut buf) {
             let mut buf = Vec::new();
             for cause in e.iter_chain() {
                 buf.clear();
@@ -148,5 +149,24 @@ fn try_create_romhack(patch: &[u8], iso: &mut [u8]) -> Result<(), Error> {
 
     JSPrinter.print(None, "Writing", "Rom Hack");
     let mut writer = BufWriter::new(RomHackWriter);
-    write_iso(&mut writer, &romhack)
+    if !romhack.is_wii_iso() {
+        write_iso(
+            &mut BufWriter::with_capacity(
+                4 << 20,
+                writer,
+            ),
+            &romhack,
+        )
+    }
+    else {
+        let mut vec_writer = BufWriter::with_capacity(4 << 20, wii_crypto::array_stream::VecWriter::new());
+        write_iso(
+            &mut vec_writer,
+            &romhack,
+        )?;
+        JSPrinter.print(None, "Encrypting", "ISO");
+        wii_crypto::wii_disc::finalize_iso(vec_writer.into_inner()?.as_slice(), iso)?;
+        JSPrinter.print(None, "Writing", "ISO to file");
+        writer.write_all(&iso).or(Err(failure::err_msg("Could not write the romhack.")))
+    }
 }
