@@ -48,26 +48,63 @@ if (typeof window["TextDecoder"] === "undefined") {
   decodeUtf8 = (data) => decoder.decode(data);
 }
 
+function parseFile(file, callback) {
+  return new Promise((resolve, reject) => {
+    var fileSize   = file.size;
+    var chunkSize  = 128 * 1024 * 1024; // bytes
+    var offset     = 0;
+    var chunkReaderBlock = null;
+
+    var readEventHandler = function(evt) {
+      if (evt.target.error == null) {
+        try {
+          callback(evt.target.result, offset);
+        } catch (e) {
+          reject(e);
+          return;
+        }
+        offset += evt.target.result.byteLength;
+      } else {
+        reject(evt.target.error);
+        return;
+      }
+      if (offset >= fileSize) {
+        // Done reading file
+        resolve();
+        return;
+      }
+
+      chunkReaderBlock(offset, chunkSize, file);
+    }
+
+    chunkReaderBlock = function(_offset, length, _file) {
+      var r = new FileReader();
+      var blob = _file.slice(_offset, length + _offset);
+      r.onload = readEventHandler;
+      r.onerror = reject;
+      r.readAsArrayBuffer(blob);
+    }
+
+    chunkReaderBlock(offset, chunkSize, file);
+  });
+}
+
 async function allocFile(wasm, elementId) {
   const files = document.getElementById(elementId).files;
   if (files.length < 1 || files[0] == null) {
     return null;
   }
   const file = files[0];
-  const contents = await new Promise((resolve) => {
-    const reader = new FileReader();
-    reader.onload = () => {
-      const contents = reader.result;
-      resolve(contents);
-    };
-    reader.readAsArrayBuffer(file);
-  });
-  const len = contents.byteLength;
+  const len = file.size;
   const ptr = wasm.exports.alloc(len);
-  const slice = new Uint8Array(wasm.exports.memory.buffer, ptr, len);
-  slice.set(new Uint8Array(contents));
-
-  return [ptr, len, contents];
+  await parseFile(file, (chunck, offset) => {
+    if (chunck.byteLength + ptr + offset > wasm.exports.memory.buffer.length) {
+      throw new RangeError(`Tried to write past buffer size [${ptr + offset + chunck.byteLength}; buffer size: ${wasm.exports.memory.buffer.length}]`);
+    }
+    const slice = new Uint8Array(wasm.exports.memory.buffer, ptr + offset, chunck.byteLength);
+    slice.set(new Uint8Array(chunck));
+  });
+  return [ptr, len, wasm.exports.memory.buffer.slice(ptr, len)];
 }
 
 function exportFile(filename, data) {
@@ -201,10 +238,13 @@ async function run() {
   }
 
   function decodeString(ptr, len) {
+    ptr = Number(BigInt.asUintN(32, BigInt(ptr)))
     const memory = new Uint8Array(context.wasm.exports.memory.buffer);
     const slice = memory.slice(ptr, ptr + len);
     return decodeUtf8(slice);
   }
+
+  compiledModule.catch((e) => { console.error(e); keyValPrint("Error", e.toString(), "error") });
 
   let wasm = await WebAssembly.instantiate(await compiledModule, {
     "./romhack_bg.js": {
@@ -222,7 +262,11 @@ async function run() {
 
   keyValPrint("Opening", "ISO");
 
-  const isoFile = await allocFile(wasm, "iso");
+  const isoFile = await allocFile(wasm, "iso")
+    .catch((e) => {
+      console.error(e);
+      keyValPrint("Error", "Unable to allocate space for the ISO", "error");
+    });
   if (isoFile == null) {
     return;
   }
@@ -248,8 +292,17 @@ async function run() {
       patchUrl = releases.get(selectedVersion).get(selectedVersion+'-gcn-ntscj.patch');
       break;
     }
+    case "RZDE01": {
+      patchUrl = releases.get(selectedVersion).get(selectedVersion+'-wii-ntscu-10.patch');
+      break;
+    }
+    case "RZDP01": {
+      patchUrl = releases.get(selectedVersion).get(selectedVersion+'-wii-pal.patch');
+      break;
+    }
     default: {
       console.error("Not a supported ISO.");
+      keyValPrint("Error", "Not a supported ISO.", "error");
       return;
     }
   }
@@ -264,7 +317,13 @@ async function run() {
   let returnVal;
 
   fetch(url)
-    .then((response) => response.arrayBuffer())
+    .then((response) => {
+      if (!response.ok) {
+        console.error(new Error(`${response.url}: ${response.status} - ${response.statusText}`));
+        throw new Error(`Could not fetch the patch file. [${response.status} (${response.statusText})]`);
+      }
+      return response.arrayBuffer();
+    })
     .then(function (buffer) {
       patchLen = buffer.byteLength;
       patchPtr = wasm.exports.alloc(patchLen);
@@ -282,7 +341,11 @@ async function run() {
         isoPtr,
         isoLen
       );
-
+      if (returnVal != 1) {
+        return Promise.reject(new Error(`Could not compile the romhack`));
+      }
+    })
+    .then(() => {
       if (returnVal == 1) {
         keyValPrint("Downloading", "Rom Hack");
 
@@ -295,5 +358,5 @@ async function run() {
         keyValPrint("Finished", "");
       }
     })
-    .catch((error) => console.error(error));
+    .catch((e) => { console.error(e); keyValPrint("Aborted", e.message, "error") });
 }

@@ -514,16 +514,16 @@ pub fn build_and_emit_iso<P: KeyValPrint, F: FileSource>(
         .context("Couldn't write the final ISO")?;
     }
     else {
-        let mut file_writer = File::create(out_path.clone()).context("Couldn't create the final ISO")?;
-        let mut vec_writer = BufWriter::with_capacity(4 << 20, VecWriter::new());
+        let mut vec_writer = VecWriter::new();
         iso::writer::write_iso(
             &mut vec_writer,
             &iso,
         )
         .context("Couldn't write the final ISO")?;
         printer.print(None, "Encrypting", "ISO");
-        finalize_iso(vec_writer.into_inner()?.as_slice(), &mut buf)?;
+        finalize_iso(vec_writer.as_slice(), &mut buf)?;
         printer.print(None, "Writing", "ISO to file");
+        let mut file_writer = File::create(out_path.clone()).context("Couldn't create the final ISO")?;
         file_writer.write_all(&buf)?;
     }
 
