@@ -21,8 +21,8 @@ if (typeof window["TextDecoder"] === "undefined") {
       } else if (value > 0xdf && value < 0xf0) {
         str += String.fromCharCode(
           ((value & 0x0f) << 12) |
-            ((data[i + 1] & 0x3f) << 6) |
-            (data[i + 2] & 0x3f)
+          ((data[i + 1] & 0x3f) << 6) |
+          (data[i + 2] & 0x3f)
         );
         i += 2;
       } else {
@@ -48,14 +48,14 @@ if (typeof window["TextDecoder"] === "undefined") {
   decodeUtf8 = (data) => decoder.decode(data);
 }
 
-function parseFile(file, callback) {
+async function parseFile(file, callback) {
   return new Promise((resolve, reject) => {
-    var fileSize   = file.size;
-    var chunkSize  = 128 * 1024 * 1024; // bytes
-    var offset     = 0;
+    var fileSize = file.size;
+    var chunkSize = 128 * 1024 * 1024; // bytes
+    var offset = 0;
     var chunkReaderBlock = null;
 
-    var readEventHandler = function(evt) {
+    var readEventHandler = function (evt) {
       if (evt.target.error == null) {
         try {
           callback(evt.target.result, offset);
@@ -77,7 +77,7 @@ function parseFile(file, callback) {
       chunkReaderBlock(offset, chunkSize, file);
     }
 
-    chunkReaderBlock = function(_offset, length, _file) {
+    chunkReaderBlock = function (_offset, length, _file) {
       var r = new FileReader();
       var blob = _file.slice(_offset, length + _offset);
       r.onload = readEventHandler;
@@ -92,17 +92,23 @@ function parseFile(file, callback) {
 async function allocFile(wasm, elementId) {
   const files = document.getElementById(elementId).files;
   if (files.length < 1 || files[0] == null) {
-    return null;
+    throw new Error("No ISO file was provided");
   }
   const file = files[0];
   const len = file.size;
   const ptr = wasm.exports.alloc(len);
   await parseFile(file, (chunck, offset) => {
-    if (chunck.byteLength + ptr + offset > wasm.exports.memory.buffer.length) {
-      throw new RangeError(`Tried to write past buffer size [${ptr + offset + chunck.byteLength}; buffer size: ${wasm.exports.memory.buffer.length}]`);
+    try {
+      const slice = new Uint8Array(wasm.exports.memory.buffer, ptr + offset, chunck.byteLength);
+      slice.set(new Uint8Array(chunck));
+    } catch (e) {
+      if (e instanceof RangeError) {
+        throw new RangeError("ISO file is too big (maximum supported file size is 2 GiB)");
+      }
+      else {
+        throw e;
+      }
     }
-    const slice = new Uint8Array(wasm.exports.memory.buffer, ptr + offset, chunck.byteLength);
-    slice.set(new Uint8Array(chunck));
   });
   return [ptr, len, wasm.exports.memory.buffer.slice(ptr, len)];
 }
@@ -262,101 +268,107 @@ async function run() {
 
   keyValPrint("Opening", "ISO");
 
-  const isoFile = await allocFile(wasm, "iso")
-    .catch((e) => {
-      console.error(e);
-      keyValPrint("Error", "Unable to allocate space for the ISO", "error");
-    });
-  if (isoFile == null) {
-    return;
-  }
-  const [isoPtr, isoLen, isoBuffer] = isoFile;
-
-  let decoder = new TextDecoder("utf-8");
-  let gameCode = decoder.decode(isoBuffer.slice(0, 6));
-
-  let patchUrl;
-  let e = document.getElementById("patch");
-  let selectedVersion = e.options[e.selectedIndex].text;
-
-  switch (gameCode) {
-    case "GZ2E01": {
-      patchUrl = releases.get(selectedVersion).get(selectedVersion+'-gcn-ntscu.patch');
-      break;
-    }
-    case "GZ2P01": {
-      patchUrl = releases.get(selectedVersion).get(selectedVersion+'-gcn-pal.patch');
-      break;
-    }
-    case "GZ2J01": {
-      patchUrl = releases.get(selectedVersion).get(selectedVersion+'-gcn-ntscj.patch');
-      break;
-    }
-    case "RZDE01": {
-      patchUrl = releases.get(selectedVersion).get(selectedVersion+'-wii-ntscu-10.patch');
-      break;
-    }
-    case "RZDP01": {
-      patchUrl = releases.get(selectedVersion).get(selectedVersion+'-wii-pal.patch');
-      break;
-    }
-    default: {
-      console.error("Not a supported ISO.");
-      keyValPrint("Error", "Not a supported ISO.", "error");
+  try {
+    const isoFile = await allocFile(wasm, "iso")
+      .catch((e) => {
+        console.error(e);
+        keyValPrint("Error", "Unable to allocate space for the ISO", "error");
+        keyValPrint("Caused by", e.message, "error");
+      });
+    if (isoFile == null) {
       return;
     }
+    const [isoPtr, isoLen, isoBuffer] = isoFile;
+
+    let decoder = new TextDecoder("utf-8");
+    let gameCode = decoder.decode(isoBuffer.slice(0, 6));
+
+    let patchUrl;
+    let e = document.getElementById("patch");
+    let selectedVersion = e.options[e.selectedIndex].text;
+
+    switch (gameCode) {
+      case "GZ2E01": {
+        patchUrl = releases.get(selectedVersion).get(selectedVersion + '-gcn-ntscu.patch');
+        break;
+      }
+      case "GZ2P01": {
+        patchUrl = releases.get(selectedVersion).get(selectedVersion + '-gcn-pal.patch');
+        break;
+      }
+      case "GZ2J01": {
+        patchUrl = releases.get(selectedVersion).get(selectedVersion + '-gcn-ntscj.patch');
+        break;
+      }
+      case "RZDE01": {
+        patchUrl = releases.get(selectedVersion).get(selectedVersion + '-wii-ntscu-10.patch');
+        break;
+      }
+      case "RZDP01": {
+        patchUrl = releases.get(selectedVersion).get(selectedVersion + '-wii-pal.patch');
+        break;
+      }
+      default: {
+        console.error("Not a supported ISO.");
+        keyValPrint("Error", "Not a supported ISO.", "error");
+        return;
+      }
+    }
+
+    keyValPrint("Opening", "Patch");
+
+    const proxyurl = "https://cors-anywhere.herokuapp.com/";
+    const url = proxyurl + patchUrl;
+
+    let patchPtr;
+    let patchLen;
+    let returnVal;
+
+    fetch(url)
+      .then((response) => {
+        if (!response.ok) {
+          console.error(new Error(`${response.url}: ${response.status} - ${response.statusText}`));
+          throw new Error(`Could not fetch the patch file. [${response.status} (${response.statusText})]`);
+        }
+        return response.arrayBuffer();
+      })
+      .then(function (buffer) {
+        patchLen = buffer.byteLength;
+        patchPtr = wasm.exports.alloc(patchLen);
+        const slice = new Uint8Array(
+          wasm.exports.memory.buffer,
+          patchPtr,
+          patchLen
+        );
+
+        slice.set(new Uint8Array(buffer));
+
+        returnVal = wasm.exports.create_romhack(
+          patchPtr,
+          patchLen,
+          isoPtr,
+          isoLen
+        );
+        if (returnVal != 1) {
+          return Promise.reject(new Error(`Could not compile the romhack`));
+        }
+      })
+      .then(() => {
+        if (returnVal == 1) {
+          keyValPrint("Downloading", "Rom Hack");
+
+          const { buffer, name } = context;
+          context = null;
+          wasm = null;
+
+          exportFile(`${name}.iso`, buffer);
+
+          keyValPrint("Finished", "");
+        }
+      })
+      .catch((e) => { console.error(e); keyValPrint("Aborted", e.message, "error") });
+  } catch (e) {
+    keyValPrint("Error", e.message, "error");
+    return;
   }
-
-  keyValPrint("Opening", "Patch");
-
-  const proxyurl = "https://cors-anywhere.herokuapp.com/";
-  const url = proxyurl + patchUrl;
-
-  let patchPtr;
-  let patchLen;
-  let returnVal;
-
-  fetch(url)
-    .then((response) => {
-      if (!response.ok) {
-        console.error(new Error(`${response.url}: ${response.status} - ${response.statusText}`));
-        throw new Error(`Could not fetch the patch file. [${response.status} (${response.statusText})]`);
-      }
-      return response.arrayBuffer();
-    })
-    .then(function (buffer) {
-      patchLen = buffer.byteLength;
-      patchPtr = wasm.exports.alloc(patchLen);
-      const slice = new Uint8Array(
-        wasm.exports.memory.buffer,
-        patchPtr,
-        patchLen
-      );
-
-      slice.set(new Uint8Array(buffer));
-
-      returnVal = wasm.exports.create_romhack(
-        patchPtr,
-        patchLen,
-        isoPtr,
-        isoLen
-      );
-      if (returnVal != 1) {
-        return Promise.reject(new Error(`Could not compile the romhack`));
-      }
-    })
-    .then(() => {
-      if (returnVal == 1) {
-        keyValPrint("Downloading", "Rom Hack");
-
-        const { buffer, name } = context;
-        context = null;
-        wasm = null;
-
-        exportFile(`${name}.iso`, buffer);
-
-        keyValPrint("Finished", "");
-      }
-    })
-    .catch((e) => { console.error(e); keyValPrint("Aborted", e.message, "error") });
 }
