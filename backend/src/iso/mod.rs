@@ -6,6 +6,7 @@ use std::path::PathBuf;
 pub mod reader;
 pub mod virtual_file_system;
 pub mod writer;
+pub(crate) mod io_ext;
 
 pub mod consts {
     // DOL_ALIGNMENT and FST_ALIGNMENT are set to 1024 and 256 to match the
@@ -38,9 +39,9 @@ impl Default for FstNodeType {
 }
 
 #[derive(Clone, Default)]
-struct FstEntry<'a> {
+struct FstEntry {
     kind: FstNodeType,
-    relative_file_name: &'a str,
+    relative_file_name: String,
     file_offset_parent_dir: usize,
     file_size_next_dir_index: usize,
     file_name_offset: usize,

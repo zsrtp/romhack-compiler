@@ -43,4 +43,11 @@ pub struct Link {
     pub entries: Vec<String>,
     pub base: String,
     pub libs: Option<Vec<PathBuf>>,
+    pub rels: Option<Rels>,
+}
+
+#[derive(Deserialize, Serialize, Debug)]
+pub struct Rels {
+    pub dest: String,
+    pub rels: Vec<PathBuf>,
 }

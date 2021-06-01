@@ -1,3 +1,9 @@
+#![cfg_attr(not(feature = "std"), no_std)]
+
+#[cfg(not(feature = "std"))]
+extern crate core as std;
+#[cfg(not(feature = "std"))]
+extern crate alloc;
 extern crate byteorder;
 #[macro_use]
 extern crate lazy_static;
@@ -6,9 +12,15 @@ extern crate aes;
 extern crate sha1;
 extern crate rayon;
 extern crate failure;
+extern crate const_format;
+extern crate futures;
+extern crate async_std;
+extern crate async_trait;
+extern crate async_recursion;
 
 pub mod wii_disc;
 pub mod array_stream;
+pub mod transform;
 
 pub mod consts {
     // DOL_ALIGNMENT and FST_ALIGNMENT are set to 1024 and 256 to match the

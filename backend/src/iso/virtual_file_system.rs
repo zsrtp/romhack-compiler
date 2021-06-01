@@ -54,6 +54,12 @@ pub struct Directory<'a> {
     pub children: Vec<Node<'a>>,
 }
 
+impl<'a> Default for Directory<'a> {
+    fn default() -> Self {
+        Directory::new("")
+    }
+}
+
 impl<'a> Directory<'a> {
     pub fn new(name: &str) -> Directory<'a> {
         Self {

@@ -3,6 +3,8 @@ extern crate structopt;
 extern crate failure;
 extern crate romhack_backend;
 extern crate termcolor;
+extern crate futures;
+extern crate async_std;
 
 mod opt;
 
@@ -12,51 +14,54 @@ use romhack_backend::{apply_patch, build, build_raw, new, KeyValPrint, MessageKi
 use std::io::prelude::*;
 use structopt::StructOpt;
 use termcolor::{BufferWriter, Color, ColorChoice, ColorSpec, WriteColor};
+use futures::executor::block_on;
 
 fn main() {
-    if let Err(e) = try_main() {
-        eprintln!();
+    block_on(async {
+        if let Err(e) = try_main().await {
+            eprintln!();
 
-        let bufwtr = BufferWriter::stderr(ColorChoice::Always);
-        let mut buffer = bufwtr.buffer();
-        let mut color = ColorSpec::new();
-        color.set_fg(Some(Color::Red)).set_bold(true);
+            let bufwtr = BufferWriter::stderr(ColorChoice::Always);
+            let mut buffer = bufwtr.buffer();
+            let mut color = ColorSpec::new();
+            color.set_fg(Some(Color::Red)).set_bold(true);
 
-        buffer
-            .set_color(&color)
-            .expect("Error while printing error");
-        write!(&mut buffer, "Error").expect("Error while printing error");
-
-        buffer.reset().expect("Error while printing error");
-        buffer
-            .set_color(ColorSpec::new().set_bold(true))
-            .expect("Error while printing error");
-        writeln!(&mut buffer, ": {}", e).expect("Error while printing error");
-
-        for cause in e.iter_chain().skip(1) {
             buffer
                 .set_color(&color)
                 .expect("Error while printing error");
-            write!(&mut buffer, "   Caused by").expect("Error while printing error");
+            write!(&mut buffer, "Error").expect("Error while printing error");
 
             buffer.reset().expect("Error while printing error");
-            writeln!(&mut buffer, " {}", cause).expect("Error while printing error");
+            buffer
+                .set_color(ColorSpec::new().set_bold(true))
+                .expect("Error while printing error");
+            writeln!(&mut buffer, ": {}", e).expect("Error while printing error");
+
+            for cause in e.iter_chain().skip(1) {
+                buffer
+                    .set_color(&color)
+                    .expect("Error while printing error");
+                write!(&mut buffer, "   Caused by").expect("Error while printing error");
+    
+                buffer.reset().expect("Error while printing error");
+                writeln!(&mut buffer, " {:?}", cause).expect("Error while printing error");
+            }
+            bufwtr.print(&buffer).expect("Error while printing error");
+        } else {
+            key_val_print(None, "Finished", "Rom Hack");
         }
-        bufwtr.print(&buffer).expect("Error while printing error");
-    } else {
-        key_val_print(None, "Finished", "Rom Hack");
-    }
+    });
 }
 
-fn try_main() -> Result<(), Error> {
+async fn try_main() -> Result<(), Error> {
     let opt = Opt::from_args();
 
     match opt {
         Opt::Build { debug, patch, raw } => {
             if raw {
-                build_raw(&TermPrinter, patch).context("Couldn't build the Rom Hack")?
+                build_raw(&TermPrinter, patch).await.context("Couldn't build the Rom Hack")?
             } else {
-                build(&TermPrinter, debug, patch).context("Couldn't build the Rom Hack")?
+                build(&TermPrinter, debug, patch).await.context("Couldn't build the Rom Hack")?
             }
         }
         Opt::New { name } => new(&name).context("Couldn't create the Rom Hack project")?,
@@ -64,7 +69,7 @@ fn try_main() -> Result<(), Error> {
             patch,
             original_game,
             output,
-        } => apply_patch(&TermPrinter, patch, original_game, output)
+        } => apply_patch(&TermPrinter, patch, original_game, output).await
             .context("Couldn't apply the patch")?,
     }
 
@@ -78,6 +83,7 @@ impl KeyValPrint for TermPrinter {
         let color = match kind {
             Some(MessageKind::Warning) => Some(Color::Yellow),
             Some(MessageKind::Error) => Some(Color::Red),
+            Some(MessageKind::Normal) => Some(Color::Green),
             None => None,
         };
         key_val_print(color, key, val)

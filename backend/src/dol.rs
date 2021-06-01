@@ -1,4 +1,4 @@
-use assembler::Instruction;
+use crate::assembler::Instruction;
 use byteorder::{ByteOrder, BE};
 use failure::Error;
 use std::fmt::{self, Debug};

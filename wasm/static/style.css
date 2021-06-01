@@ -82,6 +82,10 @@ button {
   font-family: "fira", sans-serif;
 }
 
+button:disabled {
+  color: gray;
+}
+
 img {
   float: left;
 }

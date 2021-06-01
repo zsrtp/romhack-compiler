@@ -2,15 +2,18 @@
 name = "romhack"
 version = "0.1.2"
 authors = ["Christopher Serr <cryze92@gmail.com>"]
+edition = "2018"
 
 [workspace]
 members = ["backend", "wii-crypto", "wasm", "ui"]
 
 [dependencies]
 romhack-backend = { path = "backend" }
-structopt = "0.2.10"
-termcolor = "1.0.1"
-failure = "0.1.2"
+structopt = "0.3"
+termcolor = "1.0"
+failure = "0.1"
+futures = "0.3"
+async-std = { version = "1.9", features = ["attributes"] }
 
 [profile.release]
 panic = "abort"

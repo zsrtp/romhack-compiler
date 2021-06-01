@@ -1,12 +1,15 @@
 use super::virtual_file_system::{Directory, Node, File};
+use super::io_ext::{AsyncWriteBytesExt};
 use super::{consts::*, FstEntry, FstNodeType};
-use byteorder::{WriteBytesExt, BE};
+use byteorder::BE;
 use failure::{err_msg, Error};
-use std::io::{Seek, SeekFrom, Write};
+use futures::prelude::*;
+use futures::io::{AsyncSeek, SeekFrom, AsyncWrite};
+use async_recursion::async_recursion;
 
-pub fn write_iso<W>(mut writer: &mut W, root: &Directory) -> Result<(), Error>
+pub async fn write_iso<W>(mut writer: &mut W, root: &Directory<'_>) -> Result<(), Error>
 where
-    W: Write + Seek,
+    W: AsyncWrite + AsyncSeek + Send + Unpin,
 {
     let is_wii = root.is_wii_iso();
     let (sys_index, sys_dir) = root
@@ -18,28 +21,28 @@ where
         .ok_or_else(|| err_msg("The virtual file system contains no &&systemdata folder"))?;
 
     let header = fetch_file(sys_dir, "iso.hdr".to_string())?;
-    writer.write_all(&header.data)?;
+    writer.write_all(&header.data).await?;
 
     let apploader = fetch_file(sys_dir, "AppLoader.ldr".to_string())?;
-    writer.write_all(&apploader.data)?;
+    writer.write_all(&apploader.data).await?;
 
     let dol_offset_without_padding = header.data.len() + apploader.data.len();
     let dol_offset =
         (dol_offset_without_padding + (DOL_ALIGNMENT - 1)) / DOL_ALIGNMENT * DOL_ALIGNMENT;
 
     for _ in dol_offset_without_padding..dol_offset {
-        writer.write_all(&[0])?;
+        writer.write_all(&[0]).await?;
     }
 
     let dol = fetch_file_predicate(sys_dir, |f| f.name.ends_with(".dol"))?;
-    writer.write_all(&dol.data)?;
+    writer.write_all(&dol.data).await?;
 
     let fst_list_offset_without_padding = dol_offset + dol.data.len();
     let fst_list_offset =
         (fst_list_offset_without_padding + (FST_ALIGNMENT - 1)) / FST_ALIGNMENT * FST_ALIGNMENT;
 
     for _ in fst_list_offset_without_padding..fst_list_offset {
-        writer.write_all(&[0])?;
+        writer.write_all(&[0]).await?;
     }
 
     let mut fst_len = 12;
@@ -55,7 +58,7 @@ where
     for _ in 0..fst_len {
         // TODO Seems suboptimal
         // Should not be a problem with BufWriter though
-        writer.write_all(&[0])?;
+        writer.write_all(&[0]).await?;
     }
 
     let root_fst = FstEntry {
@@ -73,29 +76,29 @@ where
         .enumerate()
         .filter(|&(i, _)| i != sys_index)
     {
-        do_output_prep(node, &mut output_fst, &mut fst_name_bank, &mut writer, 0)?;
+        do_output_prep(node, &mut output_fst, &mut fst_name_bank, &mut writer, 0).await?;
     }
 
     // Add actual root FST entry
     output_fst[0].file_size_next_dir_index = output_fst.len();
 
-    writer.seek(SeekFrom::Start((fst_list_offset) as u64))?;
+    writer.seek(SeekFrom::Start((fst_list_offset) as u64)).await?;
 
     for entry in &output_fst {
-        writer.write_u8(entry.kind as u8)?;
-        writer.write_u8(0)?;
-        writer.write_u16::<BE>(entry.file_name_offset as u16)?;
-        writer.write_i32::<BE>((entry.file_offset_parent_dir >> if is_wii {2} else {0}) as i32)?;
-        writer.write_i32::<BE>(entry.file_size_next_dir_index as i32)?;
+        writer.write_u8(entry.kind as u8).await?;
+        writer.write_u8(0).await?;
+        writer.write_u16::<BE>(entry.file_name_offset as u16).await?;
+        writer.write_i32::<BE>((entry.file_offset_parent_dir >> if is_wii {2u8} else {0u8}) as i32).await?;
+        writer.write_i32::<BE>(entry.file_size_next_dir_index as i32).await?;
     }
 
-    writer.write_all(&fst_name_bank)?;
+    writer.write_all(&fst_name_bank).await?;
 
-    writer.seek(SeekFrom::Start((OFFSET_DOL_OFFSET) as u64))?;
-    writer.write_u32::<BE>((dol_offset >> if is_wii {2} else {0}) as u32)?;
-    writer.write_u32::<BE>((fst_list_offset >> if is_wii {2} else {0}) as u32)?;
-    writer.write_u32::<BE>(fst_len as u32)?;
-    writer.write_u32::<BE>(fst_len as u32)?;
+    writer.seek(SeekFrom::Start((OFFSET_DOL_OFFSET) as u64)).await?;
+    writer.write_u32::<BE>((dol_offset >> if is_wii {2u8} else {0u8}) as u32).await?;
+    writer.write_u32::<BE>((fst_list_offset >> if is_wii {2u8} else {0u8}) as u32).await?;
+    writer.write_u32::<BE>(fst_len as u32).await?;
+    writer.write_u32::<BE>(fst_len as u32).await?;
 
     Ok(())
 }
@@ -116,15 +119,16 @@ fn calculate_fst_len(mut cur_value: usize, node: &Node) -> usize {
     cur_value
 }
 
-fn do_output_prep<W>(
-    node: &Node,
+#[async_recursion]
+async fn do_output_prep<W>(
+    node: &Node<'_>,
     output_fst: &mut Vec<FstEntry>,
     fst_name_bank: &mut Vec<u8>,
     writer: &mut W,
     mut cur_parent_dir_index: usize,
 ) -> Result<(), Error>
 where
-    W: Write + Seek,
+    W: AsyncWrite + AsyncSeek + Send + Unpin,
 {
     match *node {
         Node::Directory(ref dir) => {
@@ -151,7 +155,7 @@ where
                     fst_name_bank,
                     writer,
                     cur_parent_dir_index,
-                )?;
+                ).await?;
             }
 
             let dir_end_index = output_fst.len();
@@ -168,16 +172,16 @@ where
             fst_name_bank.extend_from_slice(file.name.as_bytes());
             fst_name_bank.push(0);
 
-            let pos = writer.seek(SeekFrom::Current(0))?;
+            let pos = writer.seek(SeekFrom::Current(0)).await?;
             let new_pos = pos + (32 - (pos % 32)) % 32;
-            writer.seek(SeekFrom::Start(new_pos))?;
+            writer.seek(SeekFrom::Start(new_pos)).await?;
 
             fst_ent.file_offset_parent_dir = new_pos as usize;
 
-            writer.write_all(&file.data)?;
+            writer.write_all(&file.data).await?;
 
             for _ in 0..(32 - (file.data.len() % 32)) % 32 {
-                writer.write_all(&[0])?;
+                writer.write_all(&[0]).await?;
             }
 
             output_fst.push(fst_ent);

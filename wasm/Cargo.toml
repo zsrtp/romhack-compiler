@@ -2,6 +2,7 @@
 name = "romhack-wasm"
 version = "0.1.0"
 authors = ["Christopher Serr <christopher.serr@gmail.com>"]
+edition = "2018"
 
 [lib]
 name = "romhack"
@@ -10,5 +11,15 @@ crate-type = ["cdylib"]
 [dependencies]
 romhack-backend = { path = "../backend" }
 wii-crypto = { path = "../wii-crypto" }
-failure = "0.1.2"
+failure = "0.1"
 wasm-bindgen = "0.2"
+wasm-bindgen-futures = "0.4"
+futures = "0.3"
+async-std = { version = "1.9", features = ["attributes"] }
+js-sys = "0.3"
+web-sys = {version = "0.3", features = ["Window", "Document", "Element", "Text", "EventTarget", "console", "Blob", "FileReader"]}
+console_error_panic_hook = "0.1"
+lazy_static = "1.4"
+rayon = "1.5"
+web_worker = "0.3"
+wee_alloc = "0.4"

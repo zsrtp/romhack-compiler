@@ -12,7 +12,9 @@ extern crate serde;
 extern crate standalone_syn as syn;
 extern crate toml;
 extern crate zip;
-extern crate wii_crypto;
+extern crate futures;
+extern crate async_std;
+extern crate async_recursion;
 
 mod assembler;
 mod banner;
@@ -31,23 +33,31 @@ use banner::Banner;
 use config::Config;
 use dol::DolFile;
 use failure::{err_msg, Error, ResultExt};
-use file_source::{FileSource, FileSystem};
+use file_source::FileSource;
+#[cfg(not(target_arch = "wasm32"))]
+use file_source::FileSystem;
 use iso::virtual_file_system::Directory;
-use iso::consts::*;
 pub use key_val_print::{DontPrint, KeyValPrint, MessageKind};
 use std::collections::HashMap;
-use std::fs::{self, File, OpenOptions};
-use std::io::{prelude::*, BufReader, BufWriter};
+#[cfg(not(target_arch = "wasm32"))]
+use std::fs;
+use std::fs::{File, OpenOptions};
+use std::io::prelude::*;
+#[cfg(not(target_arch = "wasm32"))]
+use std::io::{BufReader, BufWriter};
 use std::iter::Iterator;
+#[cfg(not(target_arch = "wasm32"))]
 use std::mem;
 use std::path::PathBuf;
 use std::process::Command;
-use zip::{write::FileOptions, ZipArchive, ZipWriter};
-use wii_crypto::wii_disc::{parse_disc, finalize_iso, Partitions};
-use wii_crypto::array_stream::{VecWriter};
-use byteorder::{ByteOrder, BE};
+#[cfg(not(target_arch = "wasm32"))]
+use zip::{write::FileOptions, ZipWriter};
+use zip::ZipArchive;
+#[cfg(not(target_arch = "wasm32"))]
+use wii_crypto::transform::{Disc, WiiPatchedDisc, WiiEncryptStream, align_addr};
 
-pub fn build<P: KeyValPrint>(printer: &P, debug: bool, patch: bool) -> Result<(), Error> {
+#[cfg(not(target_arch = "wasm32"))]
+pub async fn build<P: KeyValPrint>(printer: &P, debug: bool, patch: bool) -> Result<(), Error> {
     let mut toml_buf = String::new();
     File::open("RomHack.toml")
         .context("Couldn't find \"RomHack.toml\".")?
@@ -88,11 +98,12 @@ pub fn build<P: KeyValPrint>(printer: &P, debug: bool, patch: bool) -> Result<()
     if patch {
         build_patch(printer, compiled_lib, config)
     } else {
-        build_and_emit_iso(printer, FileSystem, compiled_lib, config)
+        build_and_emit_iso(printer, FileSystem, compiled_lib, config).await
     }
 }
 
-pub fn apply_patch<P: KeyValPrint>(
+#[cfg(not(target_arch = "wasm32"))]
+pub async fn apply_patch<P: KeyValPrint>(
     printer: &P,
     patch: PathBuf,
     original_game: PathBuf,
@@ -107,10 +118,11 @@ pub fn apply_patch<P: KeyValPrint>(
     config.src.iso = original_game;
     config.build.iso = output;
 
-    build_and_emit_iso(printer, zip, compiled_library, config)
+    build_and_emit_iso(printer, zip, compiled_library, config).await
 }
 
-pub fn build_raw<P: KeyValPrint>(printer: &P, patch: bool) -> Result<(), Error> {
+#[cfg(not(target_arch = "wasm32"))]
+pub async fn build_raw<P: KeyValPrint>(printer: &P, patch: bool) -> Result<(), Error> {
     printer.print(None, "Parsing", "RomHack.toml");
 
     let mut buffer = Vec::new();
@@ -143,7 +155,7 @@ pub fn build_raw<P: KeyValPrint>(printer: &P, patch: bool) -> Result<(), Error> 
     if patch {
         build_patch(printer, buffer, config)
     } else {
-        build_and_emit_iso(printer, FileSystem, buffer, config)
+        build_and_emit_iso(printer, FileSystem, buffer, config).await
     }
 }
 
@@ -179,6 +191,7 @@ pub fn open_config_from_patch<R: Read + Seek>(
     Ok((zip, buffer, config))
 }
 
+#[cfg(not(target_arch = "wasm32"))]
 fn add_file_to_zip(
     index: usize,
     iso_path: &String,
@@ -201,6 +214,7 @@ fn add_file_to_zip(
     Ok(())
 }
 
+#[cfg(not(target_arch = "wasm32"))]
 fn add_entry_to_zip(
     index: &mut usize,
     iso_path: &String,
@@ -223,6 +237,7 @@ fn add_entry_to_zip(
     Ok(())
 }
 
+#[cfg(not(target_arch = "wasm32"))]
 fn build_patch<P: KeyValPrint>(
     printer: &P,
     compiled_library: Vec<u8>,
@@ -331,28 +346,13 @@ fn add_file_to_iso<F: FileSource>(
     Ok(())
 }
 
-fn is_wii(buf: &[u8]) -> bool {
-    BE::read_u32(&buf[OFFSET_WII_MAGIC..]) == 0x5D1C9EA3
-}
-
 pub fn build_iso<'a, P: KeyValPrint, F: FileSource>(
     printer: &P,
     mut files: F,
-    original_iso: &'a mut [u8],
+    mut iso: Directory<'a>,
     compiled_library: Vec<u8>,
     config: &'a mut Config,
 ) -> Result<Directory<'a>, Error> {
-    let mut part_opt: Option<Partitions> = None;
-    if is_wii(original_iso) {
-        printer.print(None, "Decrypting", "partitions");
-        match parse_disc(&mut original_iso[..]) {
-            Ok(part_opt_parsed) => {
-                part_opt = part_opt_parsed.clone();
-            },
-            Err(_) => (),
-        }
-    }
-    let mut iso = iso::reader::load_iso(&original_iso[..], &part_opt).context("Couldn't parse the ISO")?;
 
     printer.print(None, "Replacing", "files");
 
@@ -474,7 +474,7 @@ pub fn build_iso<'a, P: KeyValPrint, F: FileSource>(
                 let image = files
                     .open_image(image_path)
                     .context("Couldn't open the banner replacement image")?
-                    .to_rgba();
+                    .to_rgba8();
                 banner.image.copy_from_slice(&image);
             }
             banner_file.data = banner.to_bytes(is_japanese).to_vec().into();
@@ -486,7 +486,8 @@ pub fn build_iso<'a, P: KeyValPrint, F: FileSource>(
     Ok(iso)
 }
 
-pub fn build_and_emit_iso<P: KeyValPrint, F: FileSource>(
+#[cfg(not(target_arch = "wasm32"))]
+pub async fn build_and_emit_iso<P: KeyValPrint, F: FileSource>(
     printer: &P,
     files: F,
     compiled_library: Vec<u8>,
@@ -494,39 +495,46 @@ pub fn build_and_emit_iso<P: KeyValPrint, F: FileSource>(
 ) -> Result<(), Error> {
     printer.print(None, "Loading", "original game");
 
-    let mut buf = iso::reader::load_iso_buf(&config.src.iso)
+    let disc = iso::reader::load_iso_buf(&config.src.iso).await
         .with_context(|_| format!("Couldn't find \"{}\".", config.src.iso.display()))?;
-    let out_path = mem::replace(&mut config.build.iso, Default::default());
+    match disc {
+        Disc::Wii(mut wii_disc) => {
+            let out_path = mem::take(&mut config.build.iso);
+            let iso = iso::reader::load_iso_wii(&mut wii_disc, printer).await.context("Couldn't parse the ISO")?;
+            let iso = build_iso(printer, files, iso, compiled_library, &mut config)?;
 
-    let iso = build_iso(printer, files, &mut buf[..], compiled_library, &mut config)?;
-
-    printer.print(None, "Building", "ISO");
-
-        // File::open(out_path).context("Couldn't open the final ISO")?,
-    if !iso.is_wii_iso() {
-        iso::writer::write_iso(
-            &mut BufWriter::with_capacity(
-                4 << 20,
-                File::create(out_path.clone()).context("Couldn't create the final ISO")?,
-            ),
-            &iso,
-        )
-        .context("Couldn't write the final ISO")?;
+            let mut patched_disc = WiiPatchedDisc::from(wii_disc);
+            let mut vec_writer = futures::io::Cursor::new(Vec::new());
+            iso::writer::write_iso(
+                &mut vec_writer,
+                &iso,
+            ).await
+            .context("Couldn't write the partition")?;
+            let mut vec = vec_writer.into_inner();
+            patched_disc.partition.header.data_size = align_addr((vec.len() as u64 * 0x8000) / 0x7C00, 21);
+            vec.resize(patched_disc.partition.header.data_size as usize, 0);
+            patched_disc.partition.data = vec.into_boxed_slice();
+            printer.print(None, "Encrypting", "ISO");
+            futures::io::copy(&mut WiiEncryptStream::new(patched_disc), &mut futures::io::BufWriter::with_capacity(
+                (1 << 24u8) as usize,
+                &mut async_std::fs::File::create(out_path.clone()).await.context("Couldn't create the final ISO")?
+            )).await
+            .context("Couldn't encrypt the final ISO")?;
+        },
+        Disc::GameCube(buf) => {
+            let out_path = mem::take(&mut config.build.iso);
+            let iso = iso::reader::load_iso(&buf[..]).context("Couldn't parse the ISO")?;
+            let iso = build_iso(printer, files, iso, compiled_library, &mut config)?;
+            iso::writer::write_iso(
+                &mut futures::io::BufWriter::with_capacity(
+                    4 << 20u8,
+                    async_std::fs::File::create(out_path.clone()).await.context("Couldn't create the final ISO")?,
+                ),
+                &iso,
+            ).await
+            .context("Couldn't write the final ISO")?;
+        },
     }
-    else {
-        let mut vec_writer = VecWriter::new();
-        iso::writer::write_iso(
-            &mut vec_writer,
-            &iso,
-        )
-        .context("Couldn't write the final ISO")?;
-        printer.print(None, "Encrypting", "ISO");
-        finalize_iso(vec_writer.as_slice(), &mut buf)?;
-        printer.print(None, "Writing", "ISO to file");
-        let mut file_writer = File::create(out_path.clone()).context("Couldn't create the final ISO")?;
-        file_writer.write_all(&buf)?;
-    }
-
     Ok(())
 }
 
@@ -657,6 +665,7 @@ fn patch_instructions(
     Ok(original.to_bytes())
 }
 
+#[cfg(not(target_arch = "wasm32"))]
 fn find_compiled_library(debug: bool) -> Result<PathBuf, Error> {
     use std::iter::FromIterator;
 

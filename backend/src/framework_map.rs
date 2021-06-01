@@ -1,7 +1,7 @@
-use config::Config;
-use demangle::demangle as demangle_tww;
+use crate::config::Config;
+use crate::demangle::demangle as demangle_tww;
 use failure::{Error, ResultExt};
-use linker::{LinkedSection, SectionKind};
+use crate::linker::{LinkedSection, SectionKind};
 use regex::{Captures, Regex};
 use rustc_demangle::demangle as demangle_rust;
 use std::collections::HashMap;

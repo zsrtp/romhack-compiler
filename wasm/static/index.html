@@ -3,7 +3,9 @@
   <head>
     <meta charset="UTF-8" />
     <title>GameCube ISO Patcher</title>
-    <script type="text/javascript" src="run.js"></script>
+    <script type="module" src="romhack_prelude.js"></script>
+    <script type="text/javascript" src="romhack/romhack.js"></script>
+    <script type="module" src="run.js"></script>
     <link rel="stylesheet" type="text/css" href="style.css" />
   </head>
 
@@ -24,7 +26,7 @@
         <input type="file" id="iso" name="iso" />
       </div>
 
-      <button onclick="run()">Patch</button>
+      <button id="run" disabled="">Patch</button>
     </fieldset>
 
     <fieldset class="log">

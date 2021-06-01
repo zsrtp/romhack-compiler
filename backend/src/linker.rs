@@ -1,9 +1,9 @@
 use byteorder::{ByteOrder, BE};
-use dol::{DolFile, Section};
+use crate::dol::{DolFile, Section};
 use failure::Error;
 use goblin::archive::{Archive, Member};
 use goblin::elf::{section_header, sym, Elf, Reloc};
-use key_val_print::KeyValPrint;
+use crate::key_val_print::KeyValPrint;
 use std::collections::{BTreeMap, HashMap, HashSet};
 
 pub static BASIC_LIB: &[u8] = include_bytes!("../../resources/libbasic.a");
