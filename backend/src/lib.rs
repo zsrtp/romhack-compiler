@@ -499,6 +499,7 @@ pub async fn build_and_emit_iso<P: KeyValPrint, F: FileSource>(
         .with_context(|_| format!("Couldn't find \"{}\".", config.src.iso.display()))?;
     match disc {
         Disc::Wii(mut wii_disc) => {
+            printer.print(None, "Found", "Wii disc");
             let out_path = mem::take(&mut config.build.iso);
             let iso = iso::reader::load_iso_wii(&mut wii_disc, printer).await.context("Couldn't parse the ISO")?;
             let iso = build_iso(printer, files, iso, compiled_library, &mut config)?;
@@ -522,6 +523,7 @@ pub async fn build_and_emit_iso<P: KeyValPrint, F: FileSource>(
             .context("Couldn't encrypt the final ISO")?;
         },
         Disc::GameCube(buf) => {
+            printer.print(None, "Found", "GameCube disc");
             let out_path = mem::take(&mut config.build.iso);
             let iso = iso::reader::load_iso(&buf[..]).context("Couldn't parse the ISO")?;
             let iso = build_iso(printer, files, iso, compiled_library, &mut config)?;

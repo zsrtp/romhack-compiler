@@ -1,11 +1,11 @@
-use super::virtual_file_system::{Directory, Node, File};
-use super::io_ext::{AsyncWriteBytesExt};
+use super::io_ext::AsyncWriteBytesExt;
+use super::virtual_file_system::{Directory, File, Node};
 use super::{consts::*, FstEntry, FstNodeType};
-use byteorder::BE;
-use failure::{err_msg, Error};
-use futures::prelude::*;
-use futures::io::{AsyncSeek, SeekFrom, AsyncWrite};
 use async_recursion::async_recursion;
+use byteorder::{ByteOrder, BE};
+use failure::{err_msg, Error};
+use futures::io::{AsyncSeek, AsyncWrite, SeekFrom};
+use futures::prelude::*;
 
 pub async fn write_iso<W>(mut writer: &mut W, root: &Directory<'_>) -> Result<(), Error>
 where
@@ -21,29 +21,19 @@ where
         .ok_or_else(|| err_msg("The virtual file system contains no &&systemdata folder"))?;
 
     let header = fetch_file(sys_dir, "iso.hdr".to_string())?;
-    writer.write_all(&header.data).await?;
-
     let apploader = fetch_file(sys_dir, "AppLoader.ldr".to_string())?;
-    writer.write_all(&apploader.data).await?;
 
     let dol_offset_without_padding = header.data.len() + apploader.data.len();
     let dol_offset =
         (dol_offset_without_padding + (DOL_ALIGNMENT - 1)) / DOL_ALIGNMENT * DOL_ALIGNMENT;
-
-    for _ in dol_offset_without_padding..dol_offset {
-        writer.write_all(&[0]).await?;
-    }
+    let dol_padding = dol_offset - dol_offset_without_padding;
 
     let dol = fetch_file_predicate(sys_dir, |f| f.name.ends_with(".dol"))?;
-    writer.write_all(&dol.data).await?;
 
     let fst_list_offset_without_padding = dol_offset + dol.data.len();
     let fst_list_offset =
         (fst_list_offset_without_padding + (FST_ALIGNMENT - 1)) / FST_ALIGNMENT * FST_ALIGNMENT;
-
-    for _ in fst_list_offset_without_padding..fst_list_offset {
-        writer.write_all(&[0]).await?;
-    }
+    let fst_padding = fst_list_offset - fst_list_offset_without_padding;
 
     let mut fst_len = 12;
     for (_, node) in root
@@ -54,6 +44,32 @@ where
     {
         fst_len = calculate_fst_len(fst_len, node);
     }
+
+    let d = [
+        (dol_offset >> if is_wii { 2u8 } else { 0u8 }) as u32,
+        (fst_list_offset >> if is_wii { 2u8 } else { 0u8 }) as u32,
+        fst_len as u32,
+        fst_len as u32,
+    ];
+    let mut b = vec![0u8; 0x10];
+    BE::write_u32_into(&d, &mut b);
+
+    // Write data
+    writer.write_all(&header.data[..OFFSET_DOL_OFFSET]).await?;
+    writer.write_all(&b).await?;
+    writer
+        .write_all(&header.data[OFFSET_DOL_OFFSET + 0x10..])
+        .await?;
+
+    writer.write_all(&apploader.data).await?;
+
+    let dol_padding_buf = vec![0u8; dol_padding];
+    writer.write_all(&dol_padding_buf).await?;
+
+    writer.write_all(&dol.data).await?;
+
+    let fst_padding_buf = vec![0u8; fst_padding];
+    writer.write_all(&fst_padding_buf).await?;
 
     for _ in 0..fst_len {
         // TODO Seems suboptimal
@@ -82,23 +98,27 @@ where
     // Add actual root FST entry
     output_fst[0].file_size_next_dir_index = output_fst.len();
 
-    writer.seek(SeekFrom::Start((fst_list_offset) as u64)).await?;
+    writer
+        .seek(SeekFrom::Start((fst_list_offset) as u64))
+        .await?;
 
     for entry in &output_fst {
         writer.write_u8(entry.kind as u8).await?;
         writer.write_u8(0).await?;
-        writer.write_u16::<BE>(entry.file_name_offset as u16).await?;
-        writer.write_i32::<BE>((entry.file_offset_parent_dir >> if is_wii {2u8} else {0u8}) as i32).await?;
-        writer.write_i32::<BE>(entry.file_size_next_dir_index as i32).await?;
+        writer
+            .write_u16::<BE>(entry.file_name_offset as u16)
+            .await?;
+        writer
+            .write_i32::<BE>(
+                (entry.file_offset_parent_dir >> if is_wii { 2u8 } else { 0u8 }) as i32,
+            )
+            .await?;
+        writer
+            .write_i32::<BE>(entry.file_size_next_dir_index as i32)
+            .await?;
     }
 
     writer.write_all(&fst_name_bank).await?;
-
-    writer.seek(SeekFrom::Start((OFFSET_DOL_OFFSET) as u64)).await?;
-    writer.write_u32::<BE>((dol_offset >> if is_wii {2u8} else {0u8}) as u32).await?;
-    writer.write_u32::<BE>((fst_list_offset >> if is_wii {2u8} else {0u8}) as u32).await?;
-    writer.write_u32::<BE>(fst_len as u32).await?;
-    writer.write_u32::<BE>(fst_len as u32).await?;
 
     Ok(())
 }
@@ -155,7 +175,8 @@ where
                     fst_name_bank,
                     writer,
                     cur_parent_dir_index,
-                ).await?;
+                )
+                .await?;
             }
 
             let dir_end_index = output_fst.len();
@@ -191,18 +212,31 @@ where
     Ok(())
 }
 
-fn fetch_file_predicate<'a, 'b, P>(dir: &'b Directory<'a>, predicate: P) -> Result<&'b File<'a>, failure::Error>
-    where
+fn fetch_file_predicate<'a, 'b, P>(
+    dir: &'b Directory<'a>,
+    predicate: P,
+) -> Result<&'b File<'a>, failure::Error>
+where
     P: FnMut(&&File) -> bool,
 {
     dir.children
-       .iter()
-       .filter_map(|c| c.as_file())
-       .find(predicate)
-       .ok_or_else(|| err_msg(format!("The {} folder contains no file corresponding to the given predicate", dir.name)))
+        .iter()
+        .filter_map(|c| c.as_file())
+        .find(predicate)
+        .ok_or_else(|| {
+            err_msg(format!(
+                "The {} folder contains no file corresponding to the given predicate",
+                dir.name
+            ))
+        })
 }
 
-fn fetch_file<'a, 'b>(dir: &'b Directory<'a>, name: String) -> Result<&'b File<'a>, failure::Error> {
-    fetch_file_predicate(dir, |f| f.name == name)
-        .or(Err(err_msg(format!("The {} folder contains no {}", dir.name, name))))
+fn fetch_file<'a, 'b>(
+    dir: &'b Directory<'a>,
+    name: String,
+) -> Result<&'b File<'a>, failure::Error> {
+    fetch_file_predicate(dir, |f| f.name == name).or(Err(err_msg(format!(
+        "The {} folder contains no {}",
+        dir.name, name
+    ))))
 }

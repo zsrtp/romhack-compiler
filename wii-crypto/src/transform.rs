@@ -587,12 +587,10 @@ impl<'a, R: AsyncRead + AsyncSeek + Unpin + Send + 'a> Disc<'a, R> {
         if BE::read_u32(&header[0x18..]) != 0x5D1C9EA3 {
             let mut result: Vec<u8>;
             if cfg!(not(target_arch = "wasm32")) {
-                let _pos = reader.seek(SeekFrom::Current(0)).await?;
-                result = vec![0u8; reader.seek(SeekFrom::End(0)).await? as usize];
+                result = vec![];
                 reader.seek(SeekFrom::Start(0)).await?;
-                result[..0x400].copy_from_slice(&header);
                 reader
-                    .read_exact(&mut result)
+                    .read_to_end(&mut result)
                     .await
                     .context("Couldn't read GameCube disc")?;
             } else {
@@ -820,13 +818,13 @@ fn prepare_header(buf: &mut [u8], status: &mut WESState) {
     let part: &WiiPatchedPartition = &status.disc.partition;
     let part_hashes: &mut Vec<u8> = &mut status.part_hashes;
     let part_key: &mut AesKey = &mut status.part_key;
-    &mut buf[..0x2C0].copy_from_slice(&<[u8; 0x2C0]>::from(&*part.header));
+    buf[..0x2C0].copy_from_slice(&<[u8; 0x2C0]>::from(&*part.header));
     partition_set_tmd(
         &mut buf[part.header.tmd_offset as usize..][..part.header.tmd_size],
         0,
         &*part.tmd,
     );
-    &mut buf[part.header.cert_offset as usize..][..part.header.cert_size]
+    buf[part.header.cert_offset as usize..][..part.header.cert_size]
         .copy_from_slice(&*part.cert);
 
     {
