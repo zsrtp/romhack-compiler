@@ -237,15 +237,15 @@ async function run() {
 
   switch (gameCode) {
     case "GZ2E01": {
-      patchUrl = releases.get(selectedVersion).get(selectedVersion+'-gcn-ntscu.patch');
+      patchUrl = './patches/'+selectedVersion+'-gcn-ntscu.patch';
       break;
     }
     case "GZ2P01": {
-      patchUrl = releases.get(selectedVersion).get(selectedVersion+'-gcn-pal.patch');
+      patchUrl = './patches/'+selectedVersion+'-gcn-pal.patch';
       break;
     }
     case "GZ2J01": {
-      patchUrl = releases.get(selectedVersion).get(selectedVersion+'-gcn-ntscj.patch');
+      patchUrl = './patches/'+selectedVersion+'-gcn-ntscj.patch';
       break;
     }
     default: {
@@ -256,8 +256,7 @@ async function run() {
 
   keyValPrint("Opening", "Patch");
 
-  const proxyurl = "https://cors-anywhere.herokuapp.com/";
-  const url = proxyurl + patchUrl;
+  const url = patchUrl;
 
   let patchPtr;
   let patchLen;

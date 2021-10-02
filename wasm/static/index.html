@@ -1,54 +1,52 @@
 <!DOCTYPE html>
 <html>
-  <head>
+
+<head>
     <meta charset="UTF-8" />
     <title>GameCube ISO Patcher</title>
     <script type="text/javascript" src="run.js"></script>
     <link rel="stylesheet" type="text/css" href="style.css" />
-  </head>
+</head>
 
-  <body>
-    <fieldset>
-      <legend>GameCube ISO Patcher</legend>
-      <div>
+<fieldset>
+    <legend>GameCube ISO Patcher</legend>
+    <div>
         <label for="patch">Select Patch Version:</label>
         <select name="patch" id="patch">
-          <script
-            src="fetch-github-releases.js"
-            type="text/javascript"
-          ></script>
-        </select>
-      </div>
-      <div>
+        <script src="fetch-github-releases.js" type="text/javascript"></script>
+      </select>
+    </div>
+    <div>
         <label for="iso">Select ISO:</label>
         <input type="file" id="iso" name="iso" />
-      </div>
-
-      <button onclick="run()">Patch</button>
-    </fieldset>
-
-    <fieldset class="log">
-      <legend>Log</legend>
-      <div id="log" />
-    </fieldset>
-    <br />
-    <div>
-      <a href="https://github.com/zsrtp/tpgz"
-        ><img
-          src="github.png"
-          alt="TPGZ Source"
-          style="width: 42px; height: 42px"
-      /></a>
-      <p class="p1">TPGZ</p>
     </div>
+
+    <button onclick="run()">Patch</button>
+</fieldset>
+
+<fieldset class="log">
+    <legend>Log</legend>
+    <div id="log" />
+</fieldset>
+<br />
+
+<fieldset class="log">
+    <legend>FAQ</legend>
     <div>
-      <a href="https://github.com/zsrtp/romhack-compiler"
-        ><img
-          src="github.png"
-          alt="Romhack Compiler Source"
-          style="width: 42px; height: 42px"
-      /></a>
-      <p class="p1">Romhack Compiler</p>
+        <h1>How do I open the menu?</h1>
+        <h3>L + R + DPAD-Down</h3>
+        <h1>Why don't any of my inputs work?</h1>
+        <h3>Turn on "native control" in Nintendont settings</h3>
     </div>
-  </body>
+</fieldset>
+<br />
+<div>
+    <a href="https://github.com/zsrtp/tpgz"><img src="github.png" alt="TPGZ Source" style="width: 42px; height: 42px" /></a>
+    <p class="p1">TPGZ</p>
+</div>
+<div>
+    <a href="https://github.com/zsrtp/romhack-compiler"><img src="github.png" alt="Romhack Compiler Source" style="width: 42px; height: 42px" /></a>
+    <p class="p1">Romhack Compiler</p>
+</div>
+
 </html>
