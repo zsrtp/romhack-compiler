@@ -9,6 +9,7 @@ jobs:
     runs-on: ubuntu-latest
     steps:
     - uses: actions/checkout@v2
-
+    - name: Install Rustup
+      run: curl https://sh.rustup.rs -sSf | sh -s -- -y
     - name: WASM Build Check 
       run: curl https://rustwasm.github.io/wasm-pack/installer/init.sh -sSf | sh && cd wasm && wasm-pack build
