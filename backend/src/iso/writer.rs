@@ -1,15 +1,14 @@
-use super::virtual_file_system::{Directory, Node};
+use super::virtual_file_system::{Directory, Node, File};
 use super::{consts::*, FstEntry, FstNodeType};
 use byteorder::{WriteBytesExt, BE};
-use failure::{err_msg, Error, ResultExt};
+use failure::{err_msg, Error};
 use std::io::{Seek, SeekFrom, Write};
-use std::path::{PathBuf};
-use std::fs;
 
-pub fn write_iso<W>(mut writer: W, root: &Directory) -> Result<(), Error>
+pub fn write_iso<W>(mut writer: &mut W, root: &Directory) -> Result<(), Error>
 where
     W: Write + Seek,
 {
+    let is_wii = root.is_wii_iso();
     let (sys_index, sys_dir) = root
         .children
         .iter()
@@ -18,20 +17,10 @@ where
         .find(|&(_, d)| d.name == "&&systemdata")
         .ok_or_else(|| err_msg("The virtual file system contains no &&systemdata folder"))?;
 
-    let header = sys_dir
-        .children
-        .iter()
-        .filter_map(|c| c.as_file())
-        .find(|f| f.name == "iso.hdr")
-        .ok_or_else(|| err_msg("The &&systemdata folder contains no iso.hdr"))?;
+    let header = fetch_file(sys_dir, "iso.hdr".to_string())?;
     writer.write_all(&header.data)?;
 
-    let apploader = sys_dir
-        .children
-        .iter()
-        .filter_map(|c| c.as_file())
-        .find(|f| f.name == "AppLoader.ldr")
-        .ok_or_else(|| err_msg("The &&systemdata folder contains no AppLoader.ldr"))?;
+    let apploader = fetch_file(sys_dir, "AppLoader.ldr".to_string())?;
     writer.write_all(&apploader.data)?;
 
     let dol_offset_without_padding = header.data.len() + apploader.data.len();
@@ -42,12 +31,7 @@ where
         writer.write_all(&[0])?;
     }
 
-    let dol = sys_dir
-        .children
-        .iter()
-        .filter_map(|c| c.as_file())
-        .find(|f| f.name.ends_with(".dol"))
-        .ok_or_else(|| err_msg("The &&systemdata folder contains no dol file"))?;
+    let dol = fetch_file_predicate(sys_dir, |f| f.name.ends_with(".dol"))?;
     writer.write_all(&dol.data)?;
 
     let fst_list_offset_without_padding = dol_offset + dol.data.len();
@@ -95,110 +79,24 @@ where
     // Add actual root FST entry
     output_fst[0].file_size_next_dir_index = output_fst.len();
 
-    writer.seek(SeekFrom::Start(fst_list_offset as u64))?;
+    writer.seek(SeekFrom::Start((fst_list_offset) as u64))?;
 
     for entry in &output_fst {
         writer.write_u8(entry.kind as u8)?;
         writer.write_u8(0)?;
         writer.write_u16::<BE>(entry.file_name_offset as u16)?;
-        writer.write_i32::<BE>(entry.file_offset_parent_dir as i32)?;
+        writer.write_i32::<BE>((entry.file_offset_parent_dir >> if is_wii {2} else {0}) as i32)?;
         writer.write_i32::<BE>(entry.file_size_next_dir_index as i32)?;
     }
 
     writer.write_all(&fst_name_bank)?;
 
-    writer.seek(SeekFrom::Start(OFFSET_DOL_OFFSET as u64))?;
-    writer.write_u32::<BE>(dol_offset as u32)?;
-    writer.write_u32::<BE>(fst_list_offset as u32)?;
+    writer.seek(SeekFrom::Start((OFFSET_DOL_OFFSET) as u64))?;
+    writer.write_u32::<BE>((dol_offset >> if is_wii {2} else {0}) as u32)?;
+    writer.write_u32::<BE>((fst_list_offset >> if is_wii {2} else {0}) as u32)?;
     writer.write_u32::<BE>(fst_len as u32)?;
     writer.write_u32::<BE>(fst_len as u32)?;
 
-    Ok(())
-}
-
-pub fn write_fs<'a>(path: PathBuf, root: &Directory<'a>) -> Result<(), Error> {
-    let path = path.clone();
-    fs::create_dir_all(&path)?;
-    let mut exculded_index: Vec<usize> = Vec::new();
-
-    let (root_index, root_dir, _) = write_data_dir(None, "&&rootdata", root, &path)?;
-    exculded_index.push(root_index);
-    if root.children.iter().map(|child| child.name()).collect::<Vec<&String>>().contains(&&String::from("&&rootdata")) {
-        for (_, node) in root_dir
-            .children
-            .iter()
-            .enumerate()
-        {
-            write_files_recursive(node, &path)?;
-        }
-    }
-
-    if root.children.iter().map(|child| child.name()).collect::<Vec<&String>>().contains(&&String::from("&&systemdata")) {
-        let (sys_index, sys_dir, sys_path) = write_data_dir(Some("sys"), "&&systemdata", root, &path)?;
-        exculded_index.push(sys_index);
-
-        write_data_file(&sys_path, "boot.bin", "iso.hdr", &sys_dir)?;
-        write_data_file(&sys_path, "apploader.img", "AppLoader.ldr", &sys_dir)?;
-        write_data_file(&sys_path, "main.dol", "Start.dol", &sys_dir)?;
-        write_data_file(&sys_path, "fst.bin", "Game.toc", &sys_dir)?;
-        write_data_file(&sys_path, "bi2.bin", "bi2.bin", &sys_dir)?;
-    }
-
-    if root.children.iter().map(|child| child.name()).collect::<Vec<&String>>().contains(&&String::from("&&discdata")) {
-        let (disc_index, disc_dir, disc_path) = write_data_dir(Some("disc"), "&&discdata", root, &path)?;
-        exculded_index.push(disc_index);
-
-        for (_, sub_node) in disc_dir
-            .children
-            .iter()
-            .enumerate()
-        {
-            write_files_recursive(sub_node, &disc_path)?;
-        }
-    }
-
-    let mut files_path = path.clone();
-    files_path.push("files");
-    fs::create_dir_all(&files_path)?;
-    for (_, node) in root
-        .children
-        .iter()
-        .enumerate()
-        .filter(|&(i, _)| !exculded_index.contains(&i))
-    {
-        write_files_recursive(node, &files_path)?;
-    }
-
-    Ok(())
-}
-
-fn write_data_dir<'a>(dir_fs_name: Option<&str>, dir_given_name: &str, parent_dir: &'a Directory<'a>, path: &PathBuf) -> Result<(usize, &'a Directory<'a>, PathBuf), Error> {
-    let (dir_index, dir) = parent_dir
-        .children
-        .iter()
-        .enumerate()
-        .filter_map(|(i, c)| c.as_directory().map(|d| (i, d)))
-        .find(|&(_, d)| d.name == dir_given_name)
-        .ok_or_else(|| err_msg(format!("The {} folder contains no {}", parent_dir.name, dir_given_name)))?;
-    let mut dir_path = path.clone();
-    if let Some(dir_fs_name) = dir_fs_name {
-        dir_path.push(dir_fs_name);
-        fs::create_dir_all(&dir_path)?;
-    }
-    Ok((dir_index, dir, dir_path))
-}
-
-fn write_data_file(dir_path: &PathBuf, fs_name: &str, given_name: &str, dir: &Directory) -> Result<(), Error> {
-    let file = dir
-        .children
-        .iter()
-        .filter_map(|c| c.as_file())
-        .find(|f| f.name == given_name)
-        .ok_or_else(|| err_msg(format!("The {} folder contains no {}", dir.name, given_name)))?;
-    let mut file_path = dir_path.clone();
-    file_path.push(fs_name);
-    fs::File::create(&file_path).context(format!("Couldn't open file \"{:?}\"", file_path.to_str()))?
-        .write(&file.data).context(format!("Couldn't write to file \"{:?}\"", file_path.to_str()))?;
     Ok(())
 }
 
@@ -289,32 +187,18 @@ where
     Ok(())
 }
 
-fn write_files_recursive(
-    node: &Node,
-    parent_path: &PathBuf
-) -> Result<(), Error>
+fn fetch_file_predicate<'a, 'b, P>(dir: &'b Directory<'a>, predicate: P) -> Result<&'b File<'a>, failure::Error>
+    where
+    P: FnMut(&&File) -> bool,
 {
-    match *node {
-        Node::Directory(ref dir) => {
-            let mut dir_path = parent_path.clone();
-            dir_path.push(&dir.name);
-            if !dir_path.exists() {
-                fs::create_dir_all(&dir_path).context(format!("Couldn't create directory \"{:?}\"", dir_path.to_str()))?;
-            }
-            for (_, sub_node) in dir
-                .children
-                .iter()
-                .enumerate()
-            {
-                write_files_recursive(sub_node, &dir_path)?;
-            }
-        }
-        Node::File(ref file) => {
-            let mut file_path = parent_path.clone();
-            file_path.push(&file.name);
-            fs::File::create(&file_path).context(format!("Couldn't open file \"{:?}\"", file_path.to_str()))?
-                .write(&file.data).context(format!("Couldn't write to file \"{:?}\"", file_path.to_str()))?;
-        }
-    }
-    Ok(())
+    dir.children
+       .iter()
+       .filter_map(|c| c.as_file())
+       .find(predicate)
+       .ok_or_else(|| err_msg(format!("The {} folder contains no file corresponding to the given predicate", dir.name)))
+}
+
+fn fetch_file<'a, 'b>(dir: &'b Directory<'a>, name: String) -> Result<&'b File<'a>, failure::Error> {
+    fetch_file_predicate(dir, |f| f.name == name)
+        .or(Err(err_msg(format!("The {} folder contains no {}", dir.name, name))))
 }

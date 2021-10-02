@@ -76,7 +76,7 @@ fn read_string(is_japanese: bool, bytes: &[u8]) -> Result<String, Error> {
 
 fn write_string(is_japanese: bool, text: &str, bytes: &mut [u8]) {
     let encoding = if is_japanese { SHIFT_JIS } else { UTF_8 };
-    encoding.new_encoder().encode_from_utf8(text, bytes, true);
+    let _ = encoding.new_encoder().encode_from_utf8(text, bytes, true);
 }
 
 impl Banner {
