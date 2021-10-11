@@ -334,15 +334,25 @@ fn add_file_to_iso<F: FileSource>(
     iso: &mut Directory,
     files: &mut F
 ) -> Result<(), Error> {
-    iso.resolve_and_create_path(&iso_path).data = files
-        .read_to_vec(actual_path)
-        .with_context(|_| {
-            format!(
-                "Couldn't read the file \"{}\" to store it in the ISO.",
-                actual_path.display()
-            )
-        })?
-        .into();
+    if files.is_dir(actual_path)? {
+        let names = files.get_names(actual_path)?;
+        for name in names {
+            let iso_path = String::from(iso_path) + &String::from('/') + &name;
+            let mut actual_path = actual_path.clone();
+            actual_path.push(name);
+            add_file_to_iso(&iso_path, &actual_path, iso, files)?;
+        }
+    } else {
+        iso.resolve_and_create_path(&iso_path).data = files
+            .read_to_vec(actual_path)
+            .with_context(|_| {
+                format!(
+                    "Couldn't read the file \"{}\" to store it in the ISO.",
+                    actual_path.display()
+                )
+            })?
+            .into();
+    }
     Ok(())
 }
 
