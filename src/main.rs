@@ -43,6 +43,7 @@ fn main() {
             writeln!(&mut buffer, " {}", cause).expect("Error while printing error");
         }
         bufwtr.print(&buffer).expect("Error while printing error");
+        std::process::exit(1);
     } else {
         key_val_print(None, "Finished", "Rom Hack");
     }
