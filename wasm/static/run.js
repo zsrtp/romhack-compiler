@@ -288,24 +288,8 @@ async function run() {
     let selectedVersion = e.options[e.selectedIndex].text;
 
     switch (gameCode) {
-      case "GZ2E01": {
-        patchUrl = releases.get(selectedVersion).get(selectedVersion + '-gcn-ntscu.patch');
-        break;
-      }
-      case "GZ2P01": {
-        patchUrl = releases.get(selectedVersion).get(selectedVersion + '-gcn-pal.patch');
-        break;
-      }
-      case "GZ2J01": {
-        patchUrl = releases.get(selectedVersion).get(selectedVersion + '-gcn-ntscj.patch');
-        break;
-      }
-      case "RZDE01": {
-        patchUrl = releases.get(selectedVersion).get(selectedVersion + '-wii-ntscu-10.patch');
-        break;
-      }
-      case "RZDP01": {
-        patchUrl = releases.get(selectedVersion).get(selectedVersion + '-wii-pal.patch');
+      case "GZLJ01": {
+        patchUrl = releases.get(selectedVersion).get(selectedVersion + '-twwgz-NTSCJ.patch');
         break;
       }
       default: {
