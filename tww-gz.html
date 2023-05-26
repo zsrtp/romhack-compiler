@@ -1,1 +1,55 @@
+<!DOCTYPE html>
+<html>
+  <head>
+    <meta charset="UTF-8" />
+    <title>GameCube ISO Patcher</title>
+    <script type="text/javascript" src="run.js"></script>
+    <link rel="stylesheet" type="text/css" href="style.css" />
+  </head>
+
+  <body>
+    <fieldset>
+      <legend>GameCube ISO Patcher</legend>
+      <div>
+        <label for="patch">Select Patch Version:</label>
+        <select name="patch" id="patch">
+          <script
+            src="fetch-github-releases.js"
+            type="text/javascript"
+          ></script>
+        </select>
+      </div>
+      <div>
+        <label for="iso">Select ISO:</label>
+        <input type="file" id="iso" name="iso" />
+      </div>
+
+      <button onclick="run()">Patch</button>
+    </fieldset>
+
+    <fieldset class="log">
+      <legend>Log</legend>
+      <div id="log" />
+    </fieldset>
+    <br />
+    <div>
+      <a href="https://github.com/zsrtww/tww-gz"
+        ><img
+          src="github.png"
+          alt="TPGZ Source"
+          style="width: 42px; height: 42px"
+      /></a>
+      <p class="p1">TPGZ</p>
+    </div>
+    <div>
+      <a href="https://github.com/zsrtp/romhack-compiler"
+        ><img
+          src="github.png"
+          alt="Romhack Compiler Source"
+          style="width: 42px; height: 42px"
+      /></a>
+      <p class="p1">Romhack Compiler</p>
+    </div>
+  </body>
+</html>
 
